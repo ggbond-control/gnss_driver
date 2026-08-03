@@ -1,0 +1,2 @@
+# G60 GNSS: QinHeng Electronics USB Single Serial (1a86:55d4) as ttyACM.
+SUBSYSTEM=="tty", KERNEL=="ttyACM*", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", MODE="0660", GROUP="dialout", SYMLINK+="g60_gnss"
