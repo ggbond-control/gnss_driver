@@ -9,6 +9,7 @@
 - 校验并解析 `GGA`、`RMC`、`VTG`、`GST`、`HDT` 语句。
 - 发布标准 ROS 消息：定位 `fix`、速度 `vel`、航向 `heading`、时间参考 `time_reference`。
 - 将首个有效定位作为原点，发布东-北-天（ENU）局部轨迹 `gps_path`，并提供重置服务。
+- 将 `/fix` 与 `/odometry_horizon` 的实时轨迹拟合到同一个里程计坐标系，供 RViz 对比。
 
 ## NMEA 与 ENU 术语说明
 
@@ -73,6 +74,31 @@ ros2 launch g60_driver g60_serial.launch.py
 ```zsh
 ros2 launch g60_driver g60_bringup.launch.py
 ```
+
+## GPS 与里程计对齐
+
+当系统同时发布 `/fix`（`sensor_msgs/NavSatFix`）与 `/odometry_horizon`（`nav_msgs/Odometry`）时，启动对齐节点：
+
+```zsh
+ros2 launch g60_driver gps_odom_alignment.launch.py use_rviz:=true
+```
+
+该节点只负责对齐和可视化，不会启动 GNSS 串口驱动。若 `/fix` 由本包提供，请另行启动 `g60_serial.launch.py`；若 `/fix` 来自其他定位系统，可直接使用。
+
+节点会按时间戳将 GPS 和里程计位置配对。GPS 经纬度先转换为以首个有效 GPS 点为原点的二维 ENU 米制坐标，再对最开始发生明显位移的 10 组配对样本做一次二维刚体最小二乘拟合，求得旋转与平移。拟合不改变里程计尺度，所有输出统一标记为 `world` 坐标系；数值坐标轴沿用里程计的 `x/y` 定义。
+
+默认只收集 GPS 和里程计均移动至少 1 米的 10 组样本，时间差必须不超过 0.15 秒。第 10 组采集完成后，变换永久锁定，不再受后续 GPS 漂移影响；之后每一条有效 `/fix` 都直接投影到锁定的 `odom` 坐标系并追加到 GPS 轨迹。车辆应在室外获得有效 GPS 后产生一段实际移动轨迹；原地静止时无法可靠估计两个坐标系之间的方向。
+
+RViz 固定坐标系为 `world`，红线为对齐后的 GPS 轨迹，绿线为 `/odometry_horizon` 轨迹。对应接口：
+
+| 话题或服务 | 类型 | 说明 |
+| --- | --- | --- |
+| `gps_trajectory_aligned` | `nav_msgs/Path` | 映射到 `world` 坐标系的 GPS 轨迹。 |
+| `odometry_trajectory` | `nav_msgs/Path` | 映射到 `world` 坐标系的里程计轨迹。 |
+| `gps_pose_aligned` | `geometry_msgs/PoseStamped` | 最新 GPS 对齐位置。 |
+| `reset_alignment` | `std_srvs/Trigger` | 清空轨迹、原点和拟合结果。 |
+
+常用参数位于 `config/gps_odom_alignment.yaml`：`max_time_delta` 是允许的 GPS/里程计最大时间差，`calibration_pairs` 是锁定变换所需的样本数，`min_calibration_displacement` 是两组校准样本之间的最小位移，`max_points` 是每条输出轨迹的点数上限，`output_frame` 默认为 `world`。
 
 ## 接口
 

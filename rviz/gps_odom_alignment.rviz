@@ -1,0 +1,26 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Fixed Frame: world
+    Background Color: 48; 48; 48
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Plane: XY
+      Cell Size: 1
+      Reference Frame: world
+    - Class: rviz_default_plugins/Path
+      Name: GPS trajectory aligned
+      Topic: /gps_trajectory_aligned
+      Color: 255; 0; 0
+      Line Style: Lines
+      Line Width: 0.05
+    - Class: rviz_default_plugins/Path
+      Name: Odometry trajectory
+      Topic: /odometry_trajectory
+      Color: 0; 255; 0
+      Line Style: Lines
+      Line Width: 0.05

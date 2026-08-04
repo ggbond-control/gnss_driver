@@ -1,0 +1,9 @@
+g60_gps_odom_alignment:
+  ros__parameters:
+    fix_topic: /fix
+    odom_topic: /odometry_horizon
+    output_frame: world
+    max_time_delta: 0.15
+    calibration_pairs: 50
+    min_calibration_displacement: 1.0
+    max_points: 10000

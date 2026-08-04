@@ -14,8 +14,9 @@ setup(
         ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/' + package_name + '/udev', glob('udev/*.rules')),
         ('share/' + package_name + '/scripts', glob('scripts/*.sh')),
+        ('share/' + package_name + '/rviz', glob('rviz/*.rviz')),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'numpy'],
     zip_safe=True,
     maintainer='g60_driver maintainers',
     maintainer_email='maintainer@example.com',
@@ -28,6 +29,7 @@ setup(
             'g60_tcp = g60_driver.tcp_node:main',
             'g60_nmea_topic = g60_driver.topic_node:main',
             'g60_trajectory = g60_driver.trajectory_node:main',
+            'g60_gps_odom_alignment = g60_driver.gps_odom_alignment:main',
         ],
     },
 )
