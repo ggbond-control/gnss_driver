@@ -1,1 +1,7 @@
 **/__pycache__/**
+.pytest_cache/
+build/
+install/
+log/
+data/*.ovjsn
+data/*.txt

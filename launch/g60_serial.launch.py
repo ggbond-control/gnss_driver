@@ -5,7 +5,7 @@ import os
 
 
 def generate_launch_description():
-    config = os.path.join(get_package_share_directory('g60_driver'), 'config', 'g60_serial.yaml')
+    config = os.path.join(get_package_share_directory('g60_driver'), 'config', 'g60_driver.yaml')
     return LaunchDescription([
         Node(package='g60_driver', executable='g60_serial', name='g60_serial',
              output='screen', parameters=[config]),

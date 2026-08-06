@@ -3,7 +3,7 @@
 <package format="3">
   <name>g60_driver</name>
   <version>0.1.0</version>
-  <description>ROS 2 Jazzy driver and local trajectory publisher for G60 GNSS receivers.</description>
+  <description>ROS 2 Jazzy G60 GNSS driver with GPS/odometry alignment and OVJSN export.</description>
   <maintainer email="maintainer@example.com">g60_driver maintainers</maintainer>
   <license>BSD-3-Clause</license>
   <buildtool_depend>ament_python</buildtool_depend>

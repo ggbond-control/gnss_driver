@@ -1,35 +1,37 @@
 # g60_driver
 
-`g60_driver` 是面向 G60 GNSS 接收机的 ROS 2 Jazzy 驱动包。它读取 NMEA 0183 数据并发布 ROS 标准定位消息，也可将定位结果转换为局部轨迹。本包不依赖 `gpsd`；随包提供 udev 规则，但只有管理员显式执行安装命令时才会修改系统。
+`g60_driver` 是 G60 GNSS 接收机的 ROS 2 Jazzy 驱动包。它从 G60 串口读取 NMEA 数据并发布 `/fix`，可将实时 GPS 与外部里程计 `/odometry_horizon` 对齐到 `world` 坐标系，生成 `/fix_odom`、RViz 轨迹、OVJSN 轨迹文件和可复用的二维变换 TXT 文件；也可脱离实时 GNSS，使用变换文件将 XYZ 转换为 GPS 消息。
 
-## 功能
+## 工作流程
 
-- 串口 NMEA 输入与自动重连：`g60_serial`。
-- UDP 监听：`g60_udp`；TCP 客户端：`g60_tcp`；NMEA 话题输入：`g60_nmea_topic`。
-- 校验并解析 `GGA`、`RMC`、`VTG`、`GST`、`HDT` 语句。
-- 发布标准 ROS 消息：定位 `fix`、速度 `vel`、航向 `heading`、时间参考 `time_reference`。
-- 将首个有效定位作为原点，发布东-北-天（ENU）局部轨迹 `gps_path`，并提供重置服务。
-- 将 `/fix` 与 `/odometry_horizon` 的实时轨迹拟合到同一个里程计坐标系，供 RViz 对比。
+```text
+G60 串口 -> /fix ---------------------> 原始 GPS OVJSN
+                    |                         data/gps_trajectory.ovjsn
+                    v
+           GPS/里程计二维对齐 -> world -> RViz 轨迹
+                    ^                |
+/odometry_horizon ---+                +-> /fix_odom -> 对齐后 OVJSN
+                                                    data/fix_odom_trajectory.ovjsn
+                                         +-> data/gps_odom_transform.txt
+```
 
-## NMEA 与 ENU 术语说明
+对齐过程收集最开始发生明显移动的 30 组 GPS/里程计配对样本，计算一次二维旋转和平移。达到 30 组后变换锁定，后续 GPS 漂移不会继续改变该关系。
 
-GNSS 接收机以文本形式连续输出 NMEA 0183 语句。每行以 `$` 开头，例如 `$GNGGA`；其中 `GN` 表示组合 GNSS 星座，后面的三位字母表示语句类型。
+## 功能与接口
 
-| 缩写 | 含义 | 语句主要内容 | 本驱动用途 |
-| --- | --- | --- | --- |
-| GGA | 定位解数据 | 经纬度、高程、定位质量、卫星数、HDOP | 默认发布 `fix`。 |
-| RMC | 推荐的最小导航数据 | 定位是否有效、经纬度、地面速度、地面航向、日期和时间 | 发布 `vel`；启用 `use_rmc_fix` 时也可发布 `fix`。 |
-| VTG | 对地航向和对地速度 | 车辆相对地面的航向与速度 | 发布 `vel`。 |
-| HDT | 真航向 | 以真北为零度、顺时针增加的航向角 | 转换为 ROS 四元数后发布 `heading`。 |
-| GST | GNSS 伪距误差统计 | 纬度、经度和高程的估计标准差 | 用于改进后续 `fix` 的协方差。 |
+- 读取 G60 的 NMEA 串口数据，默认设备为 `/dev/g60_gnss`，波特率为 9600。
+- 解析 GGA、RMC、VTG、GST、HDT。发布 `/fix`、`/vel`、`/heading`、`/time_reference`。
+- 将 `/fix` 与 `/odometry_horizon` 对齐，输出坐标系统一标记为 `world`。
+- 发布 `gps_trajectory_aligned`、`odometry_trajectory`、`gps_pose_aligned` 和 `/fix_odom`。
+- 使用 `template.ovjsn` 写出两份轨迹，文件内的 `Object.Name` 分别为 `fix`、`fix_odom`。
+- 写入并读取 `gps_odom_transform.txt`，支持 GPS 经纬高（LLA）与 `world` XYZ 的正反解。
+- 读取已锁定的变换文件，将 `/odometry_horizon`（`nav_msgs/Odometry`）转换为 `/fix_from_odom`（`sensor_msgs/NavSatFix`），并可写出 `fix_from_odom_trajectory.ovjsn`。
 
-`fix` 不是 ROS 再次融合得到的结果，而是接收机已经解算好的 GNSS 定位。驱动只做格式转换，并将 GGA 的定位质量及 HDOP/GST 误差写入 ROS 消息。接收机可能在内部同时使用 GPS、北斗等星座，但这是接收机自身完成的。
-
-ENU 是 East、North、Up（东、北、上）的缩写，是以米为单位的局部直角坐标系。轨迹节点把第一个有效 `fix` 设为原点 `(0, 0, 0)`；之后向东移动为 `x` 增大、向北移动为 `y` 增大、海拔升高为 `z` 增大。`gps_path` 就是这些 ENU 点构成的路径，适合车辆周边的小范围轨迹显示。
+`/fix` 是 G60 接收机解算后的定位结果，驱动只负责校验、解析和转换成 ROS 标准消息，并不再次融合 GPS 数据。
 
 ## 编译
 
-当前包位于 `~/Workspace/driver_ws/src/g60_driver`。在 zsh 中从工作空间根目录编译并加载：
+包位于 `~/Workspace/driver_ws/src/g60_driver`。在 zsh 中执行：
 
 ```zsh
 cd ~/Workspace/driver_ws
@@ -37,7 +39,7 @@ colcon build --packages-select g60_driver --symlink-install --cmake-args -DCMAKE
 source install/setup.zsh
 ```
 
-若系统尚未安装串口与四元数转换依赖：
+如缺少依赖：
 
 ```zsh
 sudo apt install ros-jazzy-tf-transformations python3-serial
@@ -45,80 +47,179 @@ sudo apt install ros-jazzy-tf-transformations python3-serial
 
 ## 设备准备
 
-G60 连接后，Linux 实际分配的设备名是 `/dev/ttyACM0`，但这个编号可能随重插或重启变化。驱动默认使用稳定名称 `/dev/g60_gnss`，波特率为 9600。
-
-若 `/dev/g60_gnss` 已存在，无须执行任何 udev 操作，直接启动即可。若不存在，执行下面命令一次，系统就会为 QinHeng `1a86:55d4` 的 G60 ACM 串口创建该名称：
+G60 使用 QinHeng USB 串口，VID:PID 为 `1a86:55d4`，设备节点是 `/dev/ttyACM*`。安装一次 udev 规则后，设备会稳定地显示为 `/dev/g60_gnss`：
 
 ```zsh
 sudo bash "$(ros2 pkg prefix g60_driver)/share/g60_driver/scripts/install_udev_rule.sh"
-```
-
-规则会设置 `dialout` 组的读写权限。若启动时提示无法打开串口，将当前用户加入该组一次，然后重新登录终端或系统：
-
-```zsh
 sudo usermod -aG dialout "$USER"
 ```
 
-`sudo chmod 777 /dev/g60_gnss` 只适合临时排查权限问题，重新插拔设备后会失效，正常使用不需要它。
+执行加入用户组的命令后需要重新登录终端或系统。`sudo chmod 777 /dev/g60_gnss` 只能临时排查权限，重新插拔后会失效，正常使用不需要执行。
 
 ## 启动
 
-仅启动 GNSS 串口驱动：
+### 仅发布 `/fix`
+
+用于检查 G60 是否正常输出定位：
 
 ```zsh
 ros2 launch g60_driver g60_serial.launch.py
 ```
 
-同时启动定位驱动与局部轨迹节点：
+串口参数在 `config/g60_driver.yaml` 中修改。临时覆盖示例：
 
 ```zsh
-ros2 launch g60_driver g60_bringup.launch.py
+ros2 run g60_driver g60_serial --ros-args -p port:=/dev/ttyACM0 -p baud:=9600
 ```
 
-## GPS 与里程计对齐
+### GPS/里程计对齐与变换输出
 
-当系统同时发布 `/fix`（`sensor_msgs/NavSatFix`）与 `/odometry_horizon`（`nav_msgs/Odometry`）时，启动对齐节点：
+默认会启动 G60、GPS/里程计对齐和两份 OVJSN 导出：
 
 ```zsh
-ros2 launch g60_driver gps_odom_alignment.launch.py use_rviz:=true
+ros2 launch g60_driver g60_alignment.launch.py
 ```
 
-该节点只负责对齐和可视化，不会启动 GNSS 串口驱动。若 `/fix` 由本包提供，请另行启动 `g60_serial.launch.py`；若 `/fix` 来自其他定位系统，可直接使用。
+如需 RViz：
 
-节点会按时间戳将 GPS 和里程计位置配对。GPS 经纬度先转换为以首个有效 GPS 点为原点的二维 ENU 米制坐标，再对最开始发生明显位移的 10 组配对样本做一次二维刚体最小二乘拟合，求得旋转与平移。拟合不改变里程计尺度，所有输出统一标记为 `world` 坐标系；数值坐标轴沿用里程计的 `x/y` 定义。
+```zsh
+ros2 launch g60_driver g60_alignment.launch.py use_rviz:=true
+```
 
-默认只收集 GPS 和里程计均移动至少 1 米的 10 组样本，时间差必须不超过 0.15 秒。第 10 组采集完成后，变换永久锁定，不再受后续 GPS 漂移影响；之后每一条有效 `/fix` 都直接投影到锁定的 `odom` 坐标系并追加到 GPS 轨迹。车辆应在室外获得有效 GPS 后产生一段实际移动轨迹；原地静止时无法可靠估计两个坐标系之间的方向。
+完整 launch 的开关如下。布尔值使用 `true` 或 `false`：
 
-RViz 固定坐标系为 `world`，红线为对齐后的 GPS 轨迹，绿线为 `/odometry_horizon` 轨迹。对应接口：
-
-| 话题或服务 | 类型 | 说明 |
+| 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `gps_trajectory_aligned` | `nav_msgs/Path` | 映射到 `world` 坐标系的 GPS 轨迹。 |
-| `odometry_trajectory` | `nav_msgs/Path` | 映射到 `world` 坐标系的里程计轨迹。 |
-| `gps_pose_aligned` | `geometry_msgs/PoseStamped` | 最新 GPS 对齐位置。 |
-| `reset_alignment` | `std_srvs/Trigger` | 清空轨迹、原点和拟合结果。 |
+| `start_g60_fix` | `true` | 启动 G60 串口节点并发布 `/fix`。设为 `false` 时使用外部系统提供的 `/fix`。 |
+| `export_polyline` | `true` | 同时写入原始 GPS 和对齐后 GPS 的 OVJSN 文件。 |
+| `use_rviz` | `false` | 启动 RViz。 |
 
-常用参数位于 `config/gps_odom_alignment.yaml`：`max_time_delta` 是允许的 GPS/里程计最大时间差，`calibration_pairs` 是锁定变换所需的样本数，`min_calibration_displacement` 是两组校准样本之间的最小位移，`max_points` 是每条输出轨迹的点数上限，`output_frame` 默认为 `world`。
+例如，外部系统已经提供 `/fix` 时，不再启动 G60 串口：
 
-## 接口
+```zsh
+ros2 launch g60_driver g60_alignment.launch.py start_g60_fix:=false use_rviz:=true
+```
 
-| 话题或服务 | 类型 | 说明 |
-| --- | --- | --- |
-| `fix` | `sensor_msgs/NavSatFix` | 默认由 GGA 发布定位；`use_rmc_fix:=true` 时由 RMC 发布。ROS 不额外融合数据。 |
-| `vel` | `geometry_msgs/TwistStamped` | RMC 或 VTG 给出的速度，`x` 为东向，`y` 为北向。 |
-| `heading` | `geometry_msgs/QuaternionStamped` | HDT 真航向，转换为 ROS ENU yaw。 |
-| `time_reference` | `sensor_msgs/TimeReference` | 接收机 UTC 时间；存在 RMC 日期时一并使用。 |
-| `gps_path` | `nav_msgs/Path` | 相对首个有效 fix 的 ENU 轨迹，坐标系默认为 `gps_path`。 |
-| `reset_trajectory` | `std_srvs/Trigger` | 清除轨迹与局部原点。 |
+只需要对齐而不导出文件：
 
-话题名均为相对名称，可通过 ROS 的 namespace 或 remap 机制调整。
+```zsh
+ros2 launch g60_driver g60_alignment.launch.py export_polyline:=false
+```
 
-## 参数
+### 使用已有变换将里程计转为 GPS
 
-所有驱动节点共用：`frame_id`（默认 `gps`）、`time_ref_source`、`use_rmc_fix`，以及位置误差参数 `epe_no_fix`、`epe_sps`、`epe_dgps`、`epe_rtk_fixed`、`epe_rtk_float`、`epe_waas`。
+第三个 launch 不启动串口、不读取实时 GPS，也不重新拟合，只读取已经生成的变换文件，并把输入里程计位置反算为 GPS。默认同时把 `/fix_from_odom` 写成 OVJSN：
 
-轨迹节点参数为：`fix_topic`、`path_topic`、`frame_id`、`max_points`。当前 ENU 换算适用于车辆附近的局部轨迹；全局建图或高精度定位应使用专门的地理坐标/融合组件。
+```zsh
+ros2 launch g60_driver g60_transform.launch.py
+```
+
+默认接口为：
+
+```text
+/odometry_horizon nav_msgs/msg/Odometry      # world/里程计坐标，单位米
+/fix_from_odom    sensor_msgs/msg/NavSatFix  # 转换后的经纬高
+```
+
+默认输出文件：
+
+```text
+data/fix_from_odom_trajectory.ovjsn
+```
+
+如果只需要发布 `/fix_from_odom`，不写 OVJSN：
+
+```zsh
+ros2 launch g60_driver g60_transform.launch.py export_polyline:=false
+```
+
+参数从 `config/g60_transform.yaml` 读取。默认配置为：
+
+```yaml
+g60_transform:
+  ros__parameters:
+    transform_path: ~/Workspace/driver_ws/src/g60_driver/data/gps_odom_transform.txt
+    input_topic: /odometry_horizon
+    output_topic: /fix_from_odom
+
+g60_fix_from_odom_to_polyline:
+  ros__parameters:
+    fix_topic: /fix_from_odom
+    output_filename: fix_from_odom_trajectory.ovjsn
+    polyline_name: fix_from_odom
+```
+
+将 GPS 文本转换为 XYZ 的输入模式暂不启动，后续会在此接口上扩展。
+
+## 对齐配置与输出
+
+GPS/里程计对齐配置集中在 `config/g60_alignment.yaml`：
+
+- `fix_topic`：GPS 输入，默认 `/fix`。
+- `odom_topic`：里程计输入，默认 `/odometry_horizon`。
+- `output_frame`：所有轨迹输出的坐标系，固定使用 `world`。
+- `calibration_pairs`：锁定变换前的有效配对数，默认 30。
+- `min_calibration_displacement`：相邻校准样本的 GPS 和里程计最小位移，默认 1 米。
+- `max_time_delta`：GPS 与里程计允许的最大时间差，默认 0.15 秒。
+
+里程计转 GPS 的配置集中在 `config/g60_transform.yaml`，包含变换文件路径、输入里程计话题和输出 GPS 话题。
+
+一组样本必须同时满足时间接近、GPS 位移至少 1 米、里程计位移至少 1 米。车辆在室内、静止或没有有效 GPS 时，无法完成可靠对齐。
+
+运行时文件写入源码包的 `data/` 目录；从安装空间执行时写入安装包的 `share/g60_driver/data/`：
+
+```text
+data/gps_trajectory.ovjsn       # /fix 的原始 GPS 轨迹
+data/fix_odom_trajectory.ovjsn      # /fix_odom 的对齐后轨迹
+data/fix_from_odom_trajectory.ovjsn # 第三个启动项输出的 /fix_from_odom 轨迹
+data/gps_odom_transform.txt         # GPS ENU 到 world 的已锁定二维变换
+```
+
+可调用下列服务重新开始记录：
+
+```zsh
+ros2 service call /reset_alignment std_srvs/srv/Trigger '{}'
+ros2 service call /reset_polyline std_srvs/srv/Trigger '{}'
+ros2 service call /reset_polyline_odom std_srvs/srv/Trigger '{}'
+ros2 service call /reset_polyline_fix_from_odom std_srvs/srv/Trigger '{}'
+```
+
+## 变换文件读写
+
+`gps_odom_transform.txt` 记录 GPS 原点和二维关系：
+
+```text
+world_xy = R * gps_enu_xy + t
+gps_enu_xy = transpose(R) * (world_xy - t)
+```
+
+其中 `gps_enu_xy` 是以首个有效 GPS 为原点的东、北坐标，单位为米。文件只有 `locked=true` 时才可用于转换。
+
+命令行正反解：
+
+```zsh
+ros2 run g60_driver g60_transform_convert --transform data/gps_odom_transform.txt --lla 30.0 120.0 10.0
+ros2 run g60_driver g60_transform_convert --transform data/gps_odom_transform.txt --xyz 1.0 2.0 0.0
+```
+
+Python 调用：
+
+```python
+from g60_driver.transform_io import GpsOdomTransform
+
+transform = GpsOdomTransform.load('data/gps_odom_transform.txt')
+world_xyz = transform.gps_lla_to_world(latitude, longitude, altitude)
+latitude, longitude, altitude = transform.world_to_gps_lla(x, y, z)
+```
+
+## 术语
+
+- GGA：定位、卫星数、定位质量和 HDOP。
+- RMC：定位有效性、地面速度、地面航向、日期和时间。
+- VTG：对地速度和对地航向。
+- HDT：真北航向。
+- ENU：East、North、Up，即东、北、上。这里用于将经纬度转换为附近区域内以米计的局部坐标。
 
 ## `resource` 文件
 
-`resource/g60_driver` 是 `ament_python` 要求的空标记文件。`colcon build` 会将其安装进 ament 包索引，使 ROS 2 能解析 `ros2 pkg prefix g60_driver`、查找 launch/config 文件和定位可执行程序，请勿删除。
+`resource/g60_driver` 是 ROS 2 Python 包的 ament 索引标记文件。它让 ROS 2 能找到包、launch 和配置文件，不能删除。

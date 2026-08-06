@@ -1,6 +1,0 @@
-g60_trajectory:
-  ros__parameters:
-    fix_topic: fix
-    path_topic: gps_path
-    frame_id: gps_path
-    max_points: 10000
