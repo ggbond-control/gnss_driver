@@ -1,6 +1,6 @@
 g60_transform:
   ros__parameters:
-    transform_path: '~/Workspace/driver_ws/src/g60_driver/data/gps_odom_transform.txt'
+    transform_path: '~/Workspace/driver_ws/src/g60_driver/data/gps_odom_transform_adjusted.txt'
     input_topic: /odometry_horizon
     output_topic: /fix_from_odom
 

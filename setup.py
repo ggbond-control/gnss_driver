@@ -30,6 +30,7 @@ setup(
             'g60_fix_to_polyline = g60_driver.fix_to_polyline:main',
             'g60_transform_convert = g60_driver.transform_convert:main',
             'g60_transform = g60_driver.transform_node:main',
+            'g60_transform_adjust = g60_driver.transform_adjust:main',
         ],
     },
 )

@@ -212,6 +212,21 @@ world_xyz = transform.gps_lla_to_world(latitude, longitude, altitude)
 latitude, longitude, altitude = transform.world_to_gps_lla(x, y, z)
 ```
 
+## 手动调整 OVJSN 和变换
+
+自动对齐结果需要微调时，使用 `g60_transform_adjust` 同时处理一份 OVJSN 和一份 TXT。输入的 `dx`、`dy` 单位为米，`yaw-deg` 单位为度，三者都在 `world` 坐标系中解释：
+
+```zsh
+ros2 run g60_driver g60_transform_adjust \
+  --ovjsn-input data/fix_from_odom_trajectory.ovjsn \
+  --transform-input data/gps_odom_transform.txt \
+  --ovjsn-output data/fix_from_odom_trajectory_adjusted.ovjsn \
+  --transform-output data/gps_odom_transform_adjusted.txt \
+  --dx 0.5 --dy -0.2 --yaw-deg 1.5
+```
+
+程序会把输入 OVJSN 的每个经纬度先转换到旧 TXT 的 `world` 坐标，再应用这组三参数，最后使用新 TXT 反算经纬度。因此输出的 OVJSN 和 TXT 是匹配的一对；原始文件不会被覆盖。
+
 ## 术语
 
 - GGA：定位、卫星数、定位质量和 HDOP。
