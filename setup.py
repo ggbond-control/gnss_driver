@@ -15,7 +15,7 @@ setup(
         ('share/' + package_name + '/udev', glob('udev/*.rules')),
         ('share/' + package_name + '/scripts', glob('scripts/*.sh')),
         ('share/' + package_name + '/rviz', glob('rviz/*.rviz')),
-        ('share/' + package_name + '/data', glob('data/*')),
+        ('share/' + package_name + '/data', ['data/.gitkeep']),
     ],
     install_requires=['setuptools', 'numpy'],
     zip_safe=True,
