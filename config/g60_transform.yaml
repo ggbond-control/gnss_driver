@@ -3,6 +3,11 @@ g60_transform:
     transform_path: '~/Workspace/driver_ws/src/g60_driver/data/gps_odom_transform_adjusted.txt'
     input_topic: /odometry_horizon
     output_topic: /fix_from_odom
+    enable_gps_goal_action: true
+    gps_goal_action: /set_gps_goal
+    navigation_action: /multi_map_navigate_to_pose
+    action_server_wait_sec: 5.0
+    action_result_timeout_sec: 0.0
 
 g60_fix_from_odom_to_polyline:
   ros__parameters:

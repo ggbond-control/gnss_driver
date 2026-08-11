@@ -151,6 +151,30 @@ g60_fix_from_odom_to_polyline:
 
 将 GPS 文本转换为 XYZ 的输入模式暂不启动，后续会在此接口上扩展。
 
+### GPS 目标导航
+
+`g60_transform.launch.py` 还提供 `/set_gps_goal` action，类型为 `inspection_interfaces/action/SetGPSGoal`。它将请求中的经纬高转换为 `world` 坐标，并调用 `/multi_map_navigate_to_pose`（`nav2_msgs/action/NavigateToPose`）。请求中的四元数作为导航目标朝向。
+
+```zsh
+ros2 action send_goal /set_gps_goal inspection_interfaces/action/SetGPSGoal \
+  "{header: {frame_id: world}, latitude: 30.28892, longitude: 119.98098, altitude: 22.6, orientation: {w: 1.0}}" \
+  --feedback
+```
+
+收到 action goal 后，节点会等待 Nav2 goal 被接受，再等待 Nav2 返回终态结果，最后返回 `SetGPSGoal.Result`。只有 Nav2 action 状态为 `SUCCEEDED` 且 `error_code=0` 时，`success` 才为 `true`；拒绝、取消、中止或超时都会返回 `false`，具体状态和错误信息放在 `message` 中。Nav2 feedback 中的 `distance_remaining` 会转发为 `SetGPSGoal.Feedback.distance_remaining`。
+
+如果外部取消 `/set_gps_goal`，节点会将取消请求继续转发给当前的 `/multi_map_navigate_to_pose` goal，并把 `/set_gps_goal` 标记为 canceled。
+
+相关参数在 `config/g60_transform.yaml` 中：
+
+- `gps_goal_action`：接收 GPS 目标的 action 名称。
+- `navigation_action`：Nav2 action 名称。
+- `enable_gps_goal_action`：是否启用该桥接。
+- `action_server_wait_sec`：等待 action server 和 goal 接受的超时时间。
+- `action_result_timeout_sec`：等待 action 终态的超时时间，`0.0` 表示一直等待。
+
+`NavigateToPose.Goal` 的 `behavior_tree` 当前留空，使用 Nav2 默认行为树；目标中的 `pose` 字段位置是变换后的坐标，`pose.header.frame_id` 直接使用 `SetGPSGoal.Request.header.frame_id`，请求必须填写该字段。
+
 ## 对齐配置与输出
 
 GPS/里程计对齐配置集中在 `config/g60_alignment.yaml`：
@@ -202,6 +226,25 @@ ros2 run g60_driver g60_transform_convert --transform data/gps_odom_transform.tx
 ros2 run g60_driver g60_transform_convert --transform data/gps_odom_transform.txt --xyz 1.0 2.0 0.0
 ```
 
+批量将 `data/trajectories.txt` 转换为 XYZ 文件：
+
+```zsh
+ros2 run g60_driver g60_transform_convert \
+  --transform data/gps_odom_transform.txt \
+  --input-file data/trajectories.txt \
+  --output-file data/xyz.txt
+```
+
+输入文件默认每行是 `longitude,latitude`，输出每行是 `x,y,z`。由于当前 `trajectories.txt` 没有高度列，Z 默认使用变换文件中的 GPS 原点高度；如果输入有第三列高度，则使用该列，也可以手动指定缺省高度：
+
+```zsh
+ros2 run g60_driver g60_transform_convert \
+  --transform data/gps_odom_transform.txt \
+  --input-file data/trajectories.txt \
+  --output-file data/xyz.txt \
+  --default-altitude 22.6
+```
+
 Python 调用：
 
 ```python
@@ -234,7 +277,3 @@ ros2 run g60_driver g60_transform_adjust \
 - VTG：对地速度和对地航向。
 - HDT：真北航向。
 - ENU：East、North、Up，即东、北、上。这里用于将经纬度转换为附近区域内以米计的局部坐标。
-
-## `resource` 文件
-
-`resource/g60_driver` 是 ROS 2 Python 包的 ament 索引标记文件。它让 ROS 2 能找到包、launch 和配置文件，不能删除。
