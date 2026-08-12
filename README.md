@@ -173,16 +173,17 @@ g60_transform.launch.py 提供 /set_gps_goal action：
 
 调用示例：
 
-    ros2 action send_goal /set_gps_goal inspection_interfaces/action/SetGPSGoal "{header: {frame_id: world}, latitude: 30.28892, longitude: 119.98098, altitude: 22.6, orientation: {w: 1.0}}" --feedback
+    ros2 action send_goal /set_gps_goal inspection_interfaces/action/SetGPSGoal "{header: {frame_id: world}, latitude: 30.28892, longitude: 119.98098, altitude: 22.6, orientation: {w: 1.0}, skip_yaw_alignment: true}" --feedback
 
 收到 GPS action goal 后，节点会：
 
 1. 读取 goal 中的 latitude、longitude、altitude。
 2. 通过 transform TXT 转换为 x、y、z。
-3. 构造 NavigateToPose.Goal。
-4. 发送到 /multi_map_navigate_to_pose。
-5. 等待 Nav2 goal 接受和最终 result。
-6. 将 Nav2 result 转成 SetGPSGoal.Result。
+3. 调用 /next_goal_policy 设置本次目标的最终 yaw 策略。
+4. 构造 NavigateToPose.Goal。
+5. 发送到 /multi_map_navigate_to_pose。
+6. 等待 Nav2 goal 接受和最终 result。
+7. 将 Nav2 result 转成 SetGPSGoal.Result。
 
 NavigateToPose.Goal 当前填法：
 
@@ -192,11 +193,19 @@ NavigateToPose.Goal 当前填法：
 - pose.pose.orientation = SetGPSGoal.Goal.orientation 归一化
 - behavior_tree = 空字符串，使用 Nav2 默认行为树
 
+skip_yaw_alignment 策略：
+
+- true：调用 /next_goal_policy 设置 align_final_yaw=false，最终抵达位置后不要求对齐请求中的 yaw。
+- false：调用 /next_goal_policy 设置 align_final_yaw=true，使用正常最终 yaw 对齐。
+- 四元数本身始终会传递给 NavigateToPose；是否执行最终对齐由 multi_map_nav 的策略决定。
+- 策略服务请求只设置 align_final_yaw，不设置 obstacle_policy，因此障碍策略恢复为 multi_map_nav 配置中的默认值。
+
 结果与反馈：
 
 - 只有 Nav2 action SUCCEEDED 且 error_code=0 时，SetGPSGoal.Result.success=true。
 - Nav2 的 distance_remaining 会转发为 SetGPSGoal.Feedback.distance_remaining。
-- 如果取消 /set_gps_goal，节点会继续取消当前 /multi_map_navigate_to_pose goal。
+- 如果策略已设置后才取消 /set_gps_goal，节点仍会先发送对应的 /multi_map_navigate_to_pose goal 以消费一次性策略，再立即转发取消请求。
+- /next_goal_policy 不可用、超时或拒绝时，/set_gps_goal 直接 ABORTED，不发送 Nav2 goal。
 
 关键配置在 config/g60_transform.yaml：
 
@@ -206,7 +215,9 @@ NavigateToPose.Goal 当前填法：
 - enable_gps_goal_action: true
 - gps_goal_action: /set_gps_goal
 - navigation_action: /multi_map_navigate_to_pose
+- next_goal_policy_service: /next_goal_policy
 - action_server_wait_sec: 5.0
+- next_goal_policy_wait_sec: 5.0
 - action_result_timeout_sec: 0.0
 
 action_result_timeout_sec 为 0.0 表示一直等待 Nav2 最终结果。

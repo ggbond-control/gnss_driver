@@ -6,7 +6,9 @@ g60_transform:
     enable_gps_goal_action: true
     gps_goal_action: /set_gps_goal
     navigation_action: /multi_map_navigate_to_pose
+    next_goal_policy_service: /next_goal_policy
     action_server_wait_sec: 5.0
+    next_goal_policy_wait_sec: 5.0
     action_result_timeout_sec: 0.0
 
 g60_fix_from_odom_to_polyline:

@@ -15,6 +15,8 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import SetParameters
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 
 from .transform_io import GpsOdomTransform, default_data_path
@@ -29,7 +31,11 @@ class TransformNode(Node):
         self.gps_goal_action = self.declare_parameter('gps_goal_action', '/set_gps_goal').value
         self.navigation_action = self.declare_parameter(
             'navigation_action', '/multi_map_navigate_to_pose').value
+        self.next_goal_policy_service = self.declare_parameter(
+            'next_goal_policy_service', '/next_goal_policy').value
         self.action_server_wait_sec = self.declare_parameter('action_server_wait_sec', 5.0).value
+        self.next_goal_policy_wait_sec = self.declare_parameter(
+            'next_goal_policy_wait_sec', 5.0).value
         self.action_result_timeout_sec = self.declare_parameter(
             'action_result_timeout_sec', 0.0).value
         path = self.declare_parameter('transform_path', '').value
@@ -43,6 +49,7 @@ class TransformNode(Node):
         # Odometry sources from sensor/SLAM stacks are often BEST_EFFORT.
         self.create_subscription(Odometry, self.input_topic, self._on_odom, qos_profile_sensor_data)
         self.navigation_client = None
+        self.next_goal_policy_client = None
         self.gps_goal_server = None
         self.navigation_group = ReentrantCallbackGroup()
         self.navigation_goal_lock = threading.Lock()
@@ -51,6 +58,9 @@ class TransformNode(Node):
         if self.enable_gps_goal_action:
             self.navigation_client = ActionClient(
                 self, NavigateToPose, self.navigation_action,
+                callback_group=self.navigation_group)
+            self.next_goal_policy_client = self.create_client(
+                SetParameters, self.next_goal_policy_service,
                 callback_group=self.navigation_group)
             self.gps_goal_server = ActionServer(
                 self, SetGPSGoal, self.gps_goal_action,
@@ -152,6 +162,52 @@ class TransformNode(Node):
             if deadline is not None and self.get_clock().now().nanoseconds / 1e9 >= deadline:
                 return None, True, None
 
+    def _wait_for_policy_service(self, goal_handle):
+        deadline = self.get_clock().now().nanoseconds / 1e9 + self.next_goal_policy_wait_sec
+        while self.get_clock().now().nanoseconds / 1e9 < deadline:
+            if goal_handle.is_cancel_requested:
+                return False, True
+            if self.next_goal_policy_client.wait_for_service(timeout_sec=0.1):
+                return True, False
+        return False, False
+
+    def _set_next_goal_yaw_policy(self, goal_handle, skip_yaw_alignment):
+        service_ready, canceled = self._wait_for_policy_service(goal_handle)
+        if canceled:
+            return False, 'SetGPSGoal was canceled before setting next goal policy', True
+        if not service_ready:
+            return False, 'next goal policy service is not ready after {:.1f}s: {}'.format(
+                self.next_goal_policy_wait_sec, self.next_goal_policy_service), False
+
+        parameter = Parameter()
+        parameter.name = 'align_final_yaw'
+        parameter.value = ParameterValue()
+        parameter.value.type = ParameterType.PARAMETER_BOOL
+        parameter.value.bool_value = not skip_yaw_alignment
+        request = SetParameters.Request()
+        request.parameters = [parameter]
+        future = self.next_goal_policy_client.call_async(request)
+
+        completed = threading.Event()
+        future.add_done_callback(lambda _: completed.set())
+        deadline = self.get_clock().now().nanoseconds / 1e9 + self.next_goal_policy_wait_sec
+        while not completed.wait(0.1):
+            if goal_handle.is_cancel_requested:
+                return False, 'SetGPSGoal was canceled while setting next goal policy', True
+            if self.get_clock().now().nanoseconds / 1e9 >= deadline:
+                return False, 'timed out waiting for next goal policy response', False
+        try:
+            response = future.result()
+        except Exception as error:
+            return False, 'next goal policy request failed: {}'.format(error), False
+        if response is None or not response.results:
+            return False, 'next goal policy returned no parameter result', False
+        failed = [result.reason or 'unspecified error'
+                  for result in response.results if not result.successful]
+        if failed:
+            return False, 'next goal policy was rejected: {}'.format('; '.join(failed)), False
+        return True, 'align_final_yaw={}'.format(not skip_yaw_alignment), False
+
     def _send_and_wait_for_navigation(self, goal_handle):
         request = goal_handle.request
         if goal_handle.is_cancel_requested:
@@ -177,6 +233,16 @@ class TransformNode(Node):
             return self._cancel(goal_handle, 'SetGPSGoal was canceled before sending navigation goal')
 
         x, y, z = self.transform.gps_lla_to_world(*values)
+        policy_set, policy_message, canceled = self._set_next_goal_yaw_policy(
+            goal_handle, request.skip_yaw_alignment)
+        if canceled:
+            return self._cancel(goal_handle, policy_message)
+        if not policy_set:
+            return self._abort(goal_handle, policy_message)
+
+        # The next-goal policy is consumed by the next Nav2 goal. Once it is
+        # accepted by multi_map_nav, always send that goal even if cancellation
+        # arrived in the meantime; cancellation is forwarded immediately below.
         goal = NavigateToPose.Goal()
         goal.pose.header.stamp = self.get_clock().now().to_msg()
         goal.pose.header.frame_id = request.header.frame_id
@@ -202,6 +268,12 @@ class TransformNode(Node):
 
         with self.active_navigation_goal_lock:
             self.active_navigation_goal_handle = navigation_goal_handle
+        if goal_handle.is_cancel_requested:
+            cancel_message = self._cancel_navigation_goal()
+            with self.active_navigation_goal_lock:
+                if self.active_navigation_goal_handle is navigation_goal_handle:
+                    self.active_navigation_goal_handle = None
+            return self._cancel(goal_handle, cancel_message)
         result_future = navigation_goal_handle.get_result_async()
         action_result, timed_out, cancel_message = self._wait_navigation_result(
             result_future, goal_handle)
