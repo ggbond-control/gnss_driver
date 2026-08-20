@@ -7,7 +7,7 @@ g60_driver 是 G60 GNSS 接收机的 ROS 2 Jazzy 包。项目按三个运行阶�
 1. 原始 GNSS 采集
    - launch: launch/g60_serial.launch.py
    - 配置: config/g60_driver.yaml
-   - 功能: 读取 /dev/g60_gnss，解析 NMEA，发布 /fix、/vel、/heading、/time_reference。
+- 功能: 读取 /dev/g60_gnss，解析 NMEA，发布 /fix、/vel、/heading、/time_reference 和原始 NMEA 调试话题 /nmea_sentence。
 
 2. GPS/里程计标定
    - launch: launch/g60_alignment.launch.py
@@ -64,7 +64,8 @@ G60 使用 QinHeng USB 串口，VID:PID 为 1a86:55d4，Linux 设备节点为 /d
 
 - 读取 /dev/g60_gnss。
 - 解析 GGA、RMC、VTG、GST、HDT。
-- 发布 /fix、/vel、/heading、/time_reference。
+- 发布 /fix、/vel、/heading、/time_reference；可选发布 /nmea_sentence。
+- 接受 GPS、组合 GNSS、GLONASS、北斗和惯导 Talker ID；当前未使用的 GSA/GSV 语句会忽略，不记录 warning。
 
 默认配置在 config/g60_driver.yaml：
 
@@ -72,6 +73,22 @@ G60 使用 QinHeng USB 串口，VID:PID 为 1a86:55d4，Linux 设备节点为 /d
 - baud: 9600
 - frame_id: gps
 - use_rmc_fix: false
+- publish_raw_nmea: false（是否发布原始 NMEA 调试话题）
+- raw_nmea_topic: /nmea_sentence（仅在 publish_raw_nmea 为 true 时生效）
+
+查看接收机的原始输出时，不要直接读取 `/dev/g60_gnss`，否则会与驱动竞争串口数据。调试时启用原始话题：
+
+在 `config/g60_driver.yaml` 中设置：
+
+    publish_raw_nmea: true
+
+然后使用：
+
+    ros2 topic echo /nmea_sentence
+
+只筛选组合定位和精度语句：
+
+    ros2 topic echo /nmea_sentence | rg '^\$(GN|GP)GGA|^\$(GN|GP)GST'
 
 /fix 是接收机自身解算后的 GNSS 结果；本节点只做格式转换，不做融合定位。
 
@@ -153,6 +170,10 @@ launch 参数：
 
 - /fix_from_odom: sensor_msgs/msg/NavSatFix
 - data/fix_from_odom_trajectory.ovjsn
+- 动态 TF：`world -> gps`（准确名称取自 TXT 的 `output_frame` 与 `gps_frame`）。该 TF 的位姿直接来自 `/odometry_horizon`，与 `/fix_from_odom` 的经纬度反算使用同一个世界坐标位置。
+- 静态 TF：`world -> map`。该 TF 使用 TXT 内的二维旋转和平移，表示 GPS 的东、北、天（ENU）坐标轴在 `world` 中的方向。Jazzy 版 `rviz_satellite` 固定使用名为 `map` 的 ENU 参考帧。
+
+在 RViz 使用 `rviz_satellite/AerialMap` 时，将 Fixed Frame 设为 `world`，并将 AerialMap 的 Topic 设为 `/fix_from_odom`。Jazzy 版插件没有 ENU 参考帧属性，会自动使用 `map`。不要另外发布静态 `world -> gps` 或 `world -> map` TF；本节点已分别发布所需的动态与静态 TF，使卫星地图能和 `world` 下的点云、轨迹叠加。
 
 默认读取：
 

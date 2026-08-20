@@ -30,6 +30,11 @@ def test_rmc_date_and_velocity():
     assert result.course_rad == pytest.approx(1.5707963)
 
 
+def test_accepts_unused_beidou_sentences():
+    assert nmea.parse(sentence('BDGSA,A,1,,,,,,,,,,,,,25.5,25.5,25.5')) is None
+    assert nmea.parse(sentence('BDGSV,1,1,00')) is None
+
+
 def test_rejects_invalid_checksum():
     with pytest.raises(ValueError, match='checksum'):
         nmea.parse('$GPGGA,123519*00')

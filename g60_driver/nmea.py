@@ -47,7 +47,7 @@ class Hdt:
     heading_deg: float
 
 
-_SENTENCE_RE = re.compile(r'^\$(?:GP|GN|GL|IN)([A-Z]{3}),.*\*([0-9A-Fa-f]{2})$')
+_SENTENCE_RE = re.compile(r'^\$(?:GP|GN|GL|BD|IN)([A-Z]{3}),.*\*([0-9A-Fa-f]{2})$')
 
 
 def valid_checksum(sentence: str) -> bool:

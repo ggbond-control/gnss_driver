@@ -5,6 +5,7 @@ import os
 import threading
 
 from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import TransformStamped
 import rclpy
 from inspection_interfaces.action import SetGPSGoal
 from nav_msgs.msg import Odometry
@@ -18,6 +19,7 @@ from rclpy.qos import qos_profile_sensor_data
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 from sensor_msgs.msg import NavSatFix, NavSatStatus
+from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from .transform_io import GpsOdomTransform, default_data_path
 
@@ -45,7 +47,15 @@ class TransformNode(Node):
         except (OSError, ValueError) as error:
             self.get_logger().fatal('cannot load transform {}: {}'.format(self.transform_path, error))
             raise
+        if self.transform.output_frame == self.transform.gps_frame:
+            raise ValueError('output_frame and gps_frame must be different in {}'.format(
+                self.transform_path))
+        if self.transform.output_frame == 'map':
+            raise ValueError('output_frame must differ from map for rviz_satellite')
         self.publisher = self.create_publisher(NavSatFix, self.output_topic, 10)
+        self.tf_broadcaster = TransformBroadcaster(self)
+        self.static_tf_broadcaster = StaticTransformBroadcaster(self)
+        self._publish_map_tf()
         # Odometry sources from sensor/SLAM stacks are often BEST_EFFORT.
         self.create_subscription(Odometry, self.input_topic, self._on_odom, qos_profile_sensor_data)
         self.navigation_client = None
@@ -72,12 +82,28 @@ class TransformNode(Node):
         self.get_logger().info('converting {} odometry to {} using {}'.format(
             self.input_topic, self.output_topic, self.transform_path))
 
+    def _publish_map_tf(self):
+        """Publish rviz_satellite's hard-coded ENU map frame from the TXT rotation."""
+        yaw = math.atan2(self.transform.rotation[1, 0], self.transform.rotation[0, 0])
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.frame_id = self.transform.output_frame
+        transform.child_frame_id = 'map'
+        transform.transform.translation.x = float(self.transform.translation[0])
+        transform.transform.translation.y = float(self.transform.translation[1])
+        transform.transform.rotation.z = math.sin(yaw / 2.0)
+        transform.transform.rotation.w = math.cos(yaw / 2.0)
+        self.static_tf_broadcaster.sendTransform(transform)
+        self.get_logger().info('published rviz_satellite ENU TF {} -> map (yaw={:.3f} deg)'.format(
+            self.transform.output_frame, math.degrees(yaw)))
+
     def _on_odom(self, message):
         position = message.pose.pose.position
         xyz = (position.x, position.y, position.z)
         if not all(math.isfinite(value) for value in xyz):
             self.get_logger().warning('ignoring non-finite odometry position')
             return
+        self._publish_gps_tf(message)
         latitude, longitude, altitude = self.transform.world_to_gps_lla(*xyz)
         fix = NavSatFix()
         fix.header.stamp = message.header.stamp
@@ -89,6 +115,32 @@ class TransformNode(Node):
         fix.altitude = float(altitude)
         fix.position_covariance_type = NavSatFix.COVARIANCE_TYPE_UNKNOWN
         self.publisher.publish(fix)
+
+    def _publish_gps_tf(self, message):
+        """Place the NavSatFix sensor frame at the same world pose as the odometry."""
+        pose = message.pose.pose
+        orientation = pose.orientation
+        quaternion = (orientation.x, orientation.y, orientation.z, orientation.w)
+        norm = math.sqrt(sum(value * value for value in quaternion))
+
+        transform = TransformStamped()
+        transform.header.stamp = message.header.stamp
+        transform.header.frame_id = self.transform.output_frame
+        transform.child_frame_id = self.transform.gps_frame
+        transform.transform.translation.x = pose.position.x
+        transform.transform.translation.y = pose.position.y
+        transform.transform.translation.z = pose.position.z
+        if math.isfinite(norm) and norm > 0.0:
+            transform.transform.rotation.x = orientation.x / norm
+            transform.transform.rotation.y = orientation.y / norm
+            transform.transform.rotation.z = orientation.z / norm
+            transform.transform.rotation.w = orientation.w / norm
+        else:
+            # A valid TF rotation is required even when the odometry source omits attitude.
+            transform.transform.rotation.w = 1.0
+            self.get_logger().warning('odometry orientation is invalid; publishing identity rotation for {} -> {}'.format(
+                self.transform.output_frame, self.transform.gps_frame))
+        self.tf_broadcaster.sendTransform(transform)
 
     def _execute_gps_goal(self, goal_handle):
         # Serialize goals and return only after Nav2 reports a terminal action result.

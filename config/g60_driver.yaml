@@ -7,3 +7,5 @@ g60_serial:
     frame_id: gps
     time_ref_source: g60_gnss
     use_rmc_fix: false
+    publish_raw_nmea: false
+    raw_nmea_topic: /nmea_sentence

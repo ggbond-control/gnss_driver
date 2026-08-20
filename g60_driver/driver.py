@@ -6,6 +6,7 @@ import math
 from geometry_msgs.msg import QuaternionStamped, TwistStamped
 from rclpy.node import Node
 from sensor_msgs.msg import NavSatFix, NavSatStatus, TimeReference
+from std_msgs.msg import String
 from tf_transformations import quaternion_from_euler
 
 from . import nmea
@@ -17,6 +18,8 @@ class GnssDriver(Node):
         self.frame_id = self.declare_parameter('frame_id', 'gps').value
         self.use_rmc_fix = self.declare_parameter('use_rmc_fix', False).value
         self.time_ref_source = self.declare_parameter('time_ref_source', 'gps').value
+        self.publish_raw_nmea = self.declare_parameter('publish_raw_nmea', False).value
+        self.raw_nmea_topic = self.declare_parameter('raw_nmea_topic', 'nmea_sentence').value
         self.epe_by_quality = {
             0: self.declare_parameter('epe_no_fix', 1000000.0).value,
             1: self.declare_parameter('epe_sps', 4.0).value,
@@ -29,6 +32,9 @@ class GnssDriver(Node):
         self.velocity_pub = self.create_publisher(TwistStamped, 'vel', 10)
         self.heading_pub = self.create_publisher(QuaternionStamped, 'heading', 10)
         self.time_pub = self.create_publisher(TimeReference, 'time_reference', 10)
+        self.raw_nmea_pub = (
+            self.create_publisher(String, self.raw_nmea_topic, 50)
+            if self.publish_raw_nmea and self.raw_nmea_topic else None)
         self.valid_fix = False
         self.receiver_std_dev = None
         self.utc_date = None
@@ -85,6 +91,11 @@ class GnssDriver(Node):
         self._publish_time(stamp, data.utc_seconds)
 
     def add_sentence(self, sentence: str, stamp=None):
+        sentence = sentence.strip()
+        if self.raw_nmea_pub is not None and sentence:
+            raw_message = String()
+            raw_message.data = sentence
+            self.raw_nmea_pub.publish(raw_message)
         try:
             data = nmea.parse(sentence)
         except ValueError as error:
