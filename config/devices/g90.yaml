@@ -1,0 +1,18 @@
+gnss_device:
+  ros__parameters:
+    # 设备类型：双天线RTK高精度GNSS终端（Unicore UM982，输出 /fix, /rtk_pvh, /odometry_from_g90）
+    is_rtk: true
+
+    # 串口连接参数（QinHeng USB 串口）
+    port: /dev/wheeltec_gnss
+    baud: 115200
+    timeout_sec: 0.1
+    reconnect_sec: 2.0
+
+    # 坐标系与发布话题
+    frame_id: gps
+    fix_topic: /fix
+    rtk_topic: /rtk_pvh
+    odom_topic: /odometry_from_g90
+    publish_navsat_fix: true
+

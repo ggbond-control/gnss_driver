@@ -1,10 +1,10 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>g60_driver</name>
+  <name>gnss_driver</name>
   <version>0.1.0</version>
-  <description>ROS 2 Jazzy G60 GNSS driver with GPS/odometry alignment and OVJSN export.</description>
-  <maintainer email="maintainer@example.com">g60_driver maintainers</maintainer>
+  <description>Extensible ROS 2 Jazzy GNSS adapters, alignment, transforms and navigation bridge.</description>
+  <maintainer email="maintainer@example.com">gnss_driver maintainers</maintainer>
   <license>BSD-3-Clause</license>
   <buildtool_depend>ament_python</buildtool_depend>
   <exec_depend>action_msgs</exec_depend>
@@ -15,6 +15,7 @@
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>robots_dog_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>

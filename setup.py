@@ -1,7 +1,7 @@
 from glob import glob
 from setuptools import find_packages, setup
 
-package_name = 'g60_driver'
+package_name = 'gnss_driver'
 
 setup(
     name=package_name,
@@ -12,6 +12,7 @@ setup(
         ('share/' + package_name, ['package.xml', 'template.ovjsn']),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
+        ('share/' + package_name + '/config/devices', glob('config/devices/*.yaml')),
         ('share/' + package_name + '/udev', glob('udev/*.rules')),
         ('share/' + package_name + '/scripts', glob('scripts/*.sh')),
         ('share/' + package_name + '/rviz', glob('rviz/*.rviz')),
@@ -19,18 +20,24 @@ setup(
     ],
     install_requires=['setuptools', 'numpy'],
     zip_safe=True,
-    maintainer='g60_driver maintainers',
+    maintainer='gnss_driver maintainers',
     maintainer_email='maintainer@example.com',
-    description='ROS 2 Jazzy G60 GNSS driver with GPS/odometry alignment and OVJSN export.',
+    description='Extensible ROS 2 Jazzy GNSS adapters, alignment, transforms and navigation bridge.',
     license='BSD-3-Clause',
     entry_points={
         'console_scripts': [
-            'g60_serial = g60_driver.serial_node:main',
-            'g60_gps_odom_alignment = g60_driver.gps_odom_alignment:main',
-            'g60_fix_to_polyline = g60_driver.fix_to_polyline:main',
-            'g60_transform_convert = g60_driver.transform_convert:main',
-            'g60_transform = g60_driver.transform_node:main',
-            'g60_transform_adjust = g60_driver.transform_adjust:main',
+            'g60_driver = gnss_driver.nodes.g60_node:main',
+            'g90_driver = gnss_driver.nodes.g90_node:main',
+            'd1m_bridge = gnss_driver.nodes.d1m_bridge_node:main',
+            'gnss_alignment = gnss_driver.gps_odom_alignment:main',
+            'gnss_trajectory = gnss_driver.fix_to_polyline:main',
+            'gnss_transform = gnss_driver.transform_node:main',
+            'gnss_transform_convert = gnss_driver.transform_convert:main',
+            'gnss_transform_adjust = gnss_driver.transform_adjust:main',
+            # Compatibility aliases
+            'gnss_serial = gnss_driver.nodes.g60_node:main',
+            'gnss_g90_serial = gnss_driver.nodes.g90_node:main',
+            'gnss_rtk_bridge = gnss_driver.nodes.d1m_bridge_node:main',
         ],
     },
 )

@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from g60_driver import nmea
+from gnss_driver import nmea
 
 
 def sentence(body):

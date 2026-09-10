@@ -1,0 +1,1 @@
+scripts/wheeltec_gnss.sh

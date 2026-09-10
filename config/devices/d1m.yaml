@@ -1,0 +1,9 @@
+gnss_device:
+  ros__parameters:
+    # 工作模式：话题桥接/转发（订阅机器人已发布的 /rtk_pvh，转换为标准 /fix）
+    is_rtk: true
+
+    # 坐标系与输入/输出话题（统一标准命名）
+    frame_id: gps
+    fix_topic: /fix
+    rtk_topic: /rtk_pvh

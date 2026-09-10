@@ -10,6 +10,7 @@ import rclpy
 from inspection_interfaces.action import SetGPSGoal
 from nav_msgs.msg import Odometry
 from nav2_msgs.action import NavigateToPose
+import numpy as np
 from rclpy.action import ActionClient, ActionServer
 from rclpy.action.server import CancelResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -21,14 +22,22 @@ from rcl_interfaces.srv import SetParameters
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
+from robots_dog_msgs.msg import UniRtkPvh
+from .rtk import rtk_to_navsat_fix
 from .transform_io import GpsOdomTransform, default_data_path
 
 
 class TransformNode(Node):
     def __init__(self):
-        super().__init__('g60_transform')
+        super().__init__('gnss_transform')
         self.input_topic = self.declare_parameter('input_topic', '/odometry_horizon').value
         self.output_topic = self.declare_parameter('output_topic', '/fix_from_odom').value
+        self.rtk_topic = self.declare_parameter('rtk_topic', '').value
+        self.rtk_output_topic = self.declare_parameter(
+            'rtk_output_topic', '/odometry_from_rtk').value
+        self.rtk_fix_topic = self.declare_parameter('rtk_fix_topic', '/fix_from_rtk').value
+        self.rtk_frame_id = self.declare_parameter('rtk_frame_id', 'gps').value
+        self.rtk_child_frame_id = self.declare_parameter('rtk_child_frame_id', 'rtk_gps').value
         self.enable_gps_goal_action = self.declare_parameter('enable_gps_goal_action', True).value
         self.gps_goal_action = self.declare_parameter('gps_goal_action', '/set_gps_goal').value
         self.navigation_action = self.declare_parameter(
@@ -41,7 +50,12 @@ class TransformNode(Node):
         self.action_result_timeout_sec = self.declare_parameter(
             'action_result_timeout_sec', 0.0).value
         path = self.declare_parameter('transform_path', '').value
-        self.transform_path = os.path.expanduser(path) if path else default_data_path('gps_odom_transform.txt')
+        if path and not os.path.isabs(os.path.expanduser(path)):
+            self.transform_path = default_data_path(path)
+        elif path:
+            self.transform_path = os.path.expanduser(path)
+        else:
+            self.transform_path = default_data_path('gps_odom_transform.txt')
         try:
             self.transform = GpsOdomTransform.load(self.transform_path)
         except (OSError, ValueError) as error:
@@ -53,11 +67,17 @@ class TransformNode(Node):
         if self.transform.output_frame == 'map':
             raise ValueError('output_frame must differ from map for rviz_satellite')
         self.publisher = self.create_publisher(NavSatFix, self.output_topic, 10)
+        self.rtk_odom_pub = (
+            self.create_publisher(Odometry, self.rtk_output_topic, 10) if self.rtk_topic else None)
+        self.rtk_fix_pub = (self.create_publisher(NavSatFix, self.rtk_fix_topic, 10)
+                            if self.rtk_topic and self.rtk_fix_topic else None)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.static_tf_broadcaster = StaticTransformBroadcaster(self)
         self._publish_map_tf()
         # Odometry sources from sensor/SLAM stacks are often BEST_EFFORT.
         self.create_subscription(Odometry, self.input_topic, self._on_odom, qos_profile_sensor_data)
+        if self.rtk_topic:
+            self.create_subscription(UniRtkPvh, self.rtk_topic, self._on_rtk, qos_profile_sensor_data)
         self.navigation_client = None
         self.next_goal_policy_client = None
         self.gps_goal_server = None
@@ -81,6 +101,9 @@ class TransformNode(Node):
                 self.gps_goal_action, self.navigation_action))
         self.get_logger().info('converting {} odometry to {} using {}'.format(
             self.input_topic, self.output_topic, self.transform_path))
+        if self.rtk_topic:
+            self.get_logger().info('converting {} UniRtkPvh positions to {}'.format(
+                self.rtk_topic, self.rtk_output_topic))
 
     def _publish_map_tf(self):
         """Publish rviz_satellite's hard-coded ENU map frame from the TXT rotation."""
@@ -115,6 +138,43 @@ class TransformNode(Node):
         fix.altitude = float(altitude)
         fix.position_covariance_type = NavSatFix.COVARIANCE_TYPE_UNKNOWN
         self.publisher.publish(fix)
+
+    def _on_rtk(self, message):
+        fix = rtk_to_navsat_fix(message, self.rtk_frame_id)
+        if fix is None:
+            self.get_logger().warning(
+                'ignoring UniRtkPvh without a solved finite position (p_sol_status={})'.format(
+                    message.bestnav.p_sol_status), throttle_duration_sec=5.0)
+            return
+        if self.rtk_fix_pub is not None:
+            self.rtk_fix_pub.publish(fix)
+        x, y, z = self.transform.gps_lla_to_world(
+            fix.latitude, fix.longitude, fix.altitude)
+        odom = Odometry()
+        odom.header.stamp = fix.header.stamp
+        odom.header.frame_id = self.transform.output_frame
+        odom.child_frame_id = self.rtk_child_frame_id
+        odom.pose.pose.position.x = float(x)
+        odom.pose.pose.position.y = float(y)
+        odom.pose.pose.position.z = float(z)
+        odom.pose.pose.orientation.w = 1.0
+        self._set_rtk_position_covariance(odom, fix)
+        self.rtk_odom_pub.publish(odom)
+
+    def _set_rtk_position_covariance(self, odom, fix):
+        """Rotate UniBestNav east/north covariance into the TXT world axes."""
+        if fix.position_covariance_type == NavSatFix.COVARIANCE_TYPE_UNKNOWN:
+            odom.pose.covariance[21] = -1.0
+            return
+        enu_covariance = np.diag((fix.position_covariance[0], fix.position_covariance[4]))
+        world_covariance = self.transform.rotation @ enu_covariance @ self.transform.rotation.T
+        odom.pose.covariance[0] = float(world_covariance[0, 0])
+        odom.pose.covariance[1] = float(world_covariance[0, 1])
+        odom.pose.covariance[6] = float(world_covariance[1, 0])
+        odom.pose.covariance[7] = float(world_covariance[1, 1])
+        odom.pose.covariance[14] = fix.position_covariance[8]
+        # Heading is intentionally not mapped in this first RTK integration.
+        odom.pose.covariance[21] = -1.0
 
     def _publish_gps_tf(self, message):
         """Place the NavSatFix sensor frame at the same world pose as the odometry."""

@@ -17,7 +17,7 @@ from .transform_io import default_data_path
 
 class FixToPolyline(Node):
     def __init__(self):
-        super().__init__('g60_fix_to_polyline')
+        super().__init__('gnss_trajectory')
         self.fix_topic = self.declare_parameter('fix_topic', '/fix').value
         output_filename = self.declare_parameter('output_filename', 'gps_trajectory.ovjsn').value
         output_path = self.declare_parameter('output_path', '').value
@@ -26,7 +26,7 @@ class FixToPolyline(Node):
         default_name = self.fix_topic.strip('/').split('/')[-1] or 'fix'
         self.polyline_name = self.declare_parameter('polyline_name', default_name).value
         reset_service = self.declare_parameter('reset_service', 'reset_polyline').value
-        default_template = os.path.join(get_package_share_directory('g60_driver'), 'template.ovjsn')
+        default_template = os.path.join(get_package_share_directory('gnss_driver'), 'template.ovjsn')
         self.template_path = self.declare_parameter('template_path', default_template).value
         self.origin = None
         self.points = []
@@ -95,7 +95,7 @@ class FixToPolyline(Node):
         directory = os.path.dirname(os.path.abspath(self.output_path))
         os.makedirs(directory, exist_ok=True)
         file_descriptor, temporary_path = tempfile.mkstemp(
-            prefix='.g60_polyline_', suffix='.tmp', dir=directory, text=True)
+            prefix='.gnss_polyline_', suffix='.tmp', dir=directory, text=True)
         try:
             with os.fdopen(file_descriptor, 'w', encoding='utf-8-sig', newline='\r\n') as stream:
                 json.dump(self._document(), stream, ensure_ascii=False, indent=4)

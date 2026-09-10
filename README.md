@@ -1,327 +1,133 @@
-# g60_driver
+# gnss_driver
 
-g60_driver 是 G60 GNSS 接收机的 ROS 2 Jazzy 包。项目按三个运行阶段组织：采集原始 GPS、标定 GPS 与里程计变换、使用已有变换进行运行时转换和 GPS 目标导航。
+`gnss_driver` 是 ROS 2 Jazzy 的通用 GNSS 功能包。包名不再绑定某一种接收机，设备差异由适配层和 YAML 参数描述；GPS/RTK 输出、局部坐标、里程计对齐、轨迹文件、TF、RViz 和 Nav2 导航使用同一套处理逻辑。
 
-## 功能总览
+## 处理链
 
-1. 原始 GNSS 采集
-   - launch: launch/g60_serial.launch.py
-   - 配置: config/g60_driver.yaml
-- 功能: 读取 /dev/g60_gnss，解析 NMEA，发布 /fix、/vel、/heading、/time_reference 和原始 NMEA 调试话题 /nmea_sentence。
+```text
+G60/NMEA、D1M/UniRtkPvh、未来 G90/Unicore
+              ↓
+       统一 NavSatFix/标准 ROS 话题
+              ↓
+     对齐、坐标变换、轨迹、TF、Nav2
+```
 
-2. GPS/里程计标定
-   - launch: launch/g60_alignment.launch.py
-   - 配置: config/g60_alignment.yaml
-   - 输入: /fix 和 /odometry_horizon
-   - 功能: 使用 30 组有效运动样本计算 GPS ENU 到 world 的二维刚体变换。
-   - 输出: /fix_odom、Path 轨迹、OVJSN 轨迹、data/gps_odom_transform.txt。
+当前已支持：
 
-3. 使用已有变换
-   - launch: launch/g60_transform.launch.py
-   - 配置: config/g60_transform.yaml
-   - 输入: /odometry_horizon 和 /set_gps_goal action
-   - 功能: 将里程计反算为 GPS，或将 GPS 目标转换为 Nav2 导航目标。
-   - 输出: /fix_from_odom、data/fix_from_odom_trajectory.ovjsn。
+- G60：串口 NMEA，解析 GGA、RMC、VTG、GST、HDT；支持 GN/GP/GL/BD/IN talker。
+- D1M：订阅 `robots_dog_msgs/msg/UniRtkPvh`（默认 `/rtk_pvh`），使用 `bestnav` 转换为 `NavSatFix` 和 `Odometry`。
+- G90：串口解析 UM982/G90 的 `#PVTSLNA`、`#BESTNAVA`，发布标准 `/fix` 和 `robots_dog_msgs/msg/UniRtkPvh`（默认 `/rtk_pvh`）。
+- GPS 与里程计二维刚体对齐；D1M 可使用带标准差的鲁棒加权最小二乘。
+- LLA↔ENU/world 正反解、`/fix_from_odom`、动态/静态 TF、OVJSN 轨迹导出。
+- `inspection_interfaces/action/SetGPSGoal` 到 Nav2 `NavigateToPose` 的桥接（包括取消转发）。
 
-4. 离线工具
-   - g60_transform_convert: LLA 与 XYZ 单点/批量转换。
-   - g60_transform_adjust: 对 transform TXT 和 OVJSN 成对做 dx、dy、yaw 微调。
+## 目录与架构
 
-当前没有保留 UDP、TCP、NMEA 话题输入和旧局部轨迹节点。
+- `gnss_driver/nodes`：面向对象分层节点实现
+  - `base_gnss_node.py`：**顶层业务基类**，封装通用的 LLA 经纬高校验、ENU 协方差矩阵对角线计算、标准 `/fix` 及 `/rtk_pvh` 发布接口。
+  - `base_serial_node.py`：**通信基类**，继承自业务基类，封装串口打开、定时轮询、断线自动重连与行接收逻辑。
+  - `g60_node.py`：G60 单天线 NMEA 驱动（`G60DriverNode`）。
+  - `g90_node.py`：G90 双天线 RTK Unicore/NMEA 驱动（`G90DriverNode`）。
+  - `d1m_bridge_node.py`：D1M 机器狗内部 RTK 话题转发桥接（`D1MBridgeNode`，无串口依赖）。
+- `gnss_driver/adapters`：专用硬件协议解析（如 `g90_unicore.py`）。
+- `gnss_driver/coordinates`、`estimators`：ENU 和 SE(2) 拟合算法。
+- `config/devices`：设备输入参数；`config/alignment.yaml`、`transform.yaml`、`trajectory.yaml`：功能配置。
+- `launch`：通用 `driver.launch.py`、`alignment.launch.py`、`transform.launch.py`。
+- `data`：标定变换与轨迹文件（详见 `data/README.md`）。
 
 ## 编译
 
-如果要使用 /set_gps_goal action，需要先 source inspection_interfaces 所在工作空间。
+```zsh
+source /opt/ros/jazzy/setup.zsh
+# 如使用 SetGPSGoal，再 source inspection_interfaces 所在工作区
+cd ~/Workspace/driver_ws
+colcon build --packages-select gnss_driver --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release -Wno-dev -DCMAKE_EXPORT_COMPILE_COMMANDS=1
+source install/setup.zsh
+```
 
-    source /opt/ros/jazzy/setup.zsh
-    source ~/Workspace/task_ws/install/setup.zsh
-    cd ~/Workspace/driver_ws
-    colcon build --packages-select g60_driver --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release -Wno-dev -DCMAKE_EXPORT_COMPILE_COMMANDS=1
-    source install/setup.zsh
+## 三个主要启动入口
 
-常用系统依赖：
+### 1. 设备输入
 
-    sudo apt install ros-jazzy-tf-transformations python3-serial
+G60 串口驱动（普通 GPS 单天线，亦可通过 `ros2 run gnss_driver g60_driver` 独立运行）：
 
-## 设备准备
+```zsh
+ros2 launch gnss_driver driver.launch.py device:=g60
+```
 
-G60 使用 QinHeng USB 串口，VID:PID 为 1a86:55d4，Linux 设备节点为 /dev/ttyACM*。本包默认读取稳定链接 /dev/g60_gnss。
+G90 串口驱动（UM982 双天线 RTK 高精度终端，亦可通过 `ros2 run gnss_driver g90_driver` 独立运行）：
 
-首次使用可安装 udev 规则：
+```zsh
+ros2 launch gnss_driver driver.launch.py device:=g90
+```
 
-    sudo bash "$(ros2 pkg prefix g60_driver)/share/g60_driver/scripts/install_udev_rule.sh"
-    sudo usermod -aG dialout "$USER"
+D1M 桥接（四足机器人内置 RTK 话题桥接，亦可通过 `ros2 run gnss_driver d1m_bridge` 独立运行）：
 
-加入 dialout 后需要重新登录。sudo chmod 777 /dev/g60_gnss 只适合临时排查权限，重插设备后会失效。
+```zsh
+ros2 launch gnss_driver driver.launch.py device:=d1m
+```
 
-## 启动 1：发布原始 /fix
+WHEELTEC G60/G70/G90 均使用 QinHeng USB 串口（VID:PID `1a86:55d4`）。
+安装别名规则（同时创建 `/dev/wheeltec_gnss` 软链接）：
 
-启动：
+```zsh
+# 在包源码根目录或安装目录下直接执行：
+sudo sh wheeltec_gnss.sh
+sudo usermod -aG dialout "$USER"
+```
 
-    ros2 launch g60_driver g60_serial.launch.py
+重新插拔设备或重新登录后生效。
 
-功能：
+### 2. GPS/里程计对齐
 
-- 读取 /dev/g60_gnss。
-- 解析 GGA、RMC、VTG、GST、HDT。
-- 发布 /fix、/vel、/heading、/time_reference；可选发布 /nmea_sentence。
-- 接受 GPS、组合 GNSS、GLONASS、北斗和惯导 Talker ID；当前未使用的 GSA/GSV 语句会忽略，不记录 warning。
+```zsh
+ros2 launch gnss_driver alignment.launch.py start_driver:=false export_polyline:=true
+```
 
-默认配置在 config/g60_driver.yaml：
+输入 `/fix` 与 `/odometry_horizon`，输出 `/fix_odom`、`world` 坐标系 Path，并写入 `data/gps_odom_transform.txt`（G60/G90 默认）或 `data/d1m_gps_odom_transform.txt`（D1M）。默认 30 个运动样本；当指定 `device:=d1m` 时自动加载 `config/d1m_alignment.yaml` 启用 200 个样本的四足加权鲁棒拟合。
 
-- port: /dev/g60_gnss
-- baud: 9600
-- frame_id: gps
-- use_rmc_fix: false
-- publish_raw_nmea: false（是否发布原始 NMEA 调试话题）
-- raw_nmea_topic: /nmea_sentence（仅在 publish_raw_nmea 为 true 时生效）
+重置：
 
-查看接收机的原始输出时，不要直接读取 `/dev/g60_gnss`，否则会与驱动竞争串口数据。调试时启用原始话题：
+```zsh
+ros2 service call /reset_alignment std_srvs/srv/Trigger '{}'
+```
 
-在 `config/g60_driver.yaml` 中设置：
+### 3. 使用已有变换
 
-    publish_raw_nmea: true
+```zsh
+ros2 launch gnss_driver transform.launch.py export_polyline:=true
+```
 
-然后使用：
+读取 `transform_path` 指向的 TXT，将 `/odometry_horizon` 反算为 `/fix_from_odom`，发布 `world -> gps` 动态 TF 和供 `rviz_satellite` 使用的 `world -> map` 静态 TF。RViz Fixed Frame 设为 `world`，AerialMap 使用 `/fix_from_odom`。
 
-    ros2 topic echo /nmea_sentence
+## D1M 运行
 
-只筛选组合定位和精度语句：
+```zsh
+ros2 launch gnss_driver alignment.launch.py device:=d1m
+ros2 launch gnss_driver transform.launch.py device:=d1m
+```
 
-    ros2 topic echo /nmea_sentence | rg '^\$(GN|GP)GGA|^\$(GN|GP)GST'
+D1M 输出 `/d1m/fix_from_rtk`、`/odometry_from_rtk`，并支持 RTK 与里程计 OVJSN 轨迹。`bestnav.lat_std/lon_std/hgt_std` 分别用于北、东、上方向方差；无有效标准差时按未知协方差处理。
 
-/fix 是接收机自身解算后的 GNSS 结果；本节点只做格式转换，不做融合定位。
+## 坐标与离线工具
 
-## 启动 2：GPS/里程计标定
+变换文件记录 GPS 原点、二维旋转 `R` 和平移 `t`：
 
-启动：
+```text
+world_xy = R * gps_enu_xy + t
+gps_enu_xy = transpose(R) * (world_xy - t)
+```
 
-    ros2 launch g60_driver g60_alignment.launch.py
+```zsh
+ros2 run gnss_driver gnss_transform_convert --transform data/gps_odom_transform.txt --lla 30.0 120.0 10.0
+ros2 run gnss_driver gnss_transform_convert --transform data/gps_odom_transform.txt --xyz 1 2 0
+ros2 run gnss_driver gnss_transform_convert --transform data/gps_odom_transform.txt --input-file data/trajectories.txt --output-file data/xyz.txt
+```
 
-输入：
+`gnss_transform_adjust` 可同时微调 TXT 和 OVJSN，原文件不会覆盖。
 
-- /fix: sensor_msgs/msg/NavSatFix
-- /odometry_horizon: nav_msgs/msg/Odometry
+## 已知限制
 
-输出：
-
-- /fix_odom: sensor_msgs/msg/NavSatFix
-- gps_trajectory_aligned: nav_msgs/msg/Path
-- odometry_trajectory: nav_msgs/msg/Path
-- gps_pose_aligned: geometry_msgs/msg/PoseStamped
-- data/gps_trajectory.ovjsn
-- data/fix_odom_trajectory.ovjsn
-- data/gps_odom_transform.txt
-
-标定逻辑：
-
-- GPS 经纬度先转成局部 ENU 米制坐标。
-- 与 /odometry_horizon 按时间戳配对。
-- 只采集发生明显移动的样本。
-- 默认采集 30 组有效样本。
-- 求一次二维刚体变换：world_xy = R * gps_enu_xy + t。
-- 变换锁定后不再继续拟合。
-
-launch 参数：
-
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| start_g60_fix | false | 是否同时启动串口 GNSS。默认使用外部已有 /fix。 |
-| export_polyline | true | 是否输出 /fix 和 /fix_odom 的 OVJSN。 |
-| use_rviz | false | 是否启动 RViz。 |
-
-如果希望本包同时发布 /fix：
-
-    ros2 launch g60_driver g60_alignment.launch.py start_g60_fix:=true use_rviz:=true
-
-如果 /fix 已由外部系统发布：
-
-    ros2 launch g60_driver g60_alignment.launch.py use_rviz:=true
-
-重置标定：
-
-    ros2 service call /reset_alignment std_srvs/srv/Trigger '{}'
-
-关键配置在 config/g60_alignment.yaml：
-
-- fix_topic: /fix
-- odom_topic: /odometry_horizon
-- fix_odom_topic: /fix_odom
-- output_frame: world
-- calibration_pairs: 30
-- min_calibration_displacement: 1.0
-- max_time_delta: 0.15
-
-## 启动 3：使用已有变换
-
-启动：
-
-    ros2 launch g60_driver g60_transform.launch.py
-
-该启动项不读取实时 GPS，也不重新标定，只读取 transform TXT。
-
-### 里程计反算 GPS
-
-输入：
-
-- /odometry_horizon: nav_msgs/msg/Odometry
-
-输出：
-
-- /fix_from_odom: sensor_msgs/msg/NavSatFix
-- data/fix_from_odom_trajectory.ovjsn
-- 动态 TF：`world -> gps`（准确名称取自 TXT 的 `output_frame` 与 `gps_frame`）。该 TF 的位姿直接来自 `/odometry_horizon`，与 `/fix_from_odom` 的经纬度反算使用同一个世界坐标位置。
-- 静态 TF：`world -> map`。该 TF 使用 TXT 内的二维旋转和平移，表示 GPS 的东、北、天（ENU）坐标轴在 `world` 中的方向。Jazzy 版 `rviz_satellite` 固定使用名为 `map` 的 ENU 参考帧。
-
-在 RViz 使用 `rviz_satellite/AerialMap` 时，将 Fixed Frame 设为 `world`，并将 AerialMap 的 Topic 设为 `/fix_from_odom`。Jazzy 版插件没有 ENU 参考帧属性，会自动使用 `map`。不要另外发布静态 `world -> gps` 或 `world -> map` TF；本节点已分别发布所需的动态与静态 TF，使卫星地图能和 `world` 下的点云、轨迹叠加。
-
-默认读取：
-
-- data/gps_odom_transform.txt
-- 如果做过手动微调，可在 config/g60_transform.yaml 中改为 data/gps_odom_transform_adjusted.txt。
-
-如果只需要发布 /fix_from_odom，不写 OVJSN：
-
-    ros2 launch g60_driver g60_transform.launch.py export_polyline:=false
-
-### GPS action 导航
-
-g60_transform.launch.py 提供 /set_gps_goal action：
-
-- action 类型: inspection_interfaces/action/SetGPSGoal
-- 下游 action: /multi_map_navigate_to_pose
-- 下游类型: nav2_msgs/action/NavigateToPose
-
-调用示例：
-
-    ros2 action send_goal /set_gps_goal inspection_interfaces/action/SetGPSGoal "{header: {frame_id: world}, latitude: 30.28892, longitude: 119.98098, altitude: 22.6, orientation: {w: 1.0}, skip_yaw_alignment: true}" --feedback
-
-收到 GPS action goal 后，节点会：
-
-1. 读取 goal 中的 latitude、longitude、altitude。
-2. 通过 transform TXT 转换为 x、y、z。
-3. 调用 /next_goal_policy 设置本次目标的最终 yaw 策略。
-4. 构造 NavigateToPose.Goal。
-5. 发送到 /multi_map_navigate_to_pose。
-6. 等待 Nav2 goal 接受和最终 result。
-7. 将 Nav2 result 转成 SetGPSGoal.Result。
-
-NavigateToPose.Goal 当前填法：
-
-- pose.header.frame_id = SetGPSGoal.Goal.header.frame_id
-- pose.header.stamp = 当前 ROS 时间
-- pose.pose.position.x/y/z = 经纬高转换后的坐标
-- pose.pose.orientation = SetGPSGoal.Goal.orientation 归一化
-- behavior_tree = 空字符串，使用 Nav2 默认行为树
-
-skip_yaw_alignment 策略：
-
-- true：调用 /next_goal_policy 设置 align_final_yaw=false，最终抵达位置后不要求对齐请求中的 yaw。
-- false：调用 /next_goal_policy 设置 align_final_yaw=true，使用正常最终 yaw 对齐。
-- 四元数本身始终会传递给 NavigateToPose；是否执行最终对齐由 multi_map_nav 的策略决定。
-- 策略服务请求只设置 align_final_yaw，不设置 obstacle_policy，因此障碍策略恢复为 multi_map_nav 配置中的默认值。
-
-结果与反馈：
-
-- 只有 Nav2 action SUCCEEDED 且 error_code=0 时，SetGPSGoal.Result.success=true。
-- Nav2 的 distance_remaining 会转发为 SetGPSGoal.Feedback.distance_remaining。
-- 如果策略已设置后才取消 /set_gps_goal，节点仍会先发送对应的 /multi_map_navigate_to_pose goal 以消费一次性策略，再立即转发取消请求。
-- /next_goal_policy 不可用、超时或拒绝时，/set_gps_goal 直接 ABORTED，不发送 Nav2 goal。
-
-关键配置在 config/g60_transform.yaml：
-
-- transform_path: ~/Workspace/driver_ws/src/g60_driver/data/gps_odom_transform.txt
-- input_topic: /odometry_horizon
-- output_topic: /fix_from_odom
-- enable_gps_goal_action: true
-- gps_goal_action: /set_gps_goal
-- navigation_action: /multi_map_navigate_to_pose
-- next_goal_policy_service: /next_goal_policy
-- action_server_wait_sec: 5.0
-- next_goal_policy_wait_sec: 5.0
-- action_result_timeout_sec: 0.0
-
-action_result_timeout_sec 为 0.0 表示一直等待 Nav2 最终结果。
-
-## 离线工具 1：坐标正反解
-
-单点 LLA 到 XYZ：
-
-    ros2 run g60_driver g60_transform_convert --transform data/gps_odom_transform.txt --lla 30.0 120.0 10.0
-
-单点 XYZ 到 LLA：
-
-    ros2 run g60_driver g60_transform_convert --transform data/gps_odom_transform.txt --xyz 1.0 2.0 0.0
-
-批量将 data/trajectories.txt 转换为 data/xyz.txt：
-
-    ros2 run g60_driver g60_transform_convert --transform data/gps_odom_transform.txt --input-file data/trajectories.txt --output-file data/xyz.txt
-
-trajectories.txt 每行格式：
-
-- longitude,latitude
-- longitude,latitude,altitude
-
-xyz.txt 每行格式：
-
-- x,y,z
-
-如果输入没有高度列，默认使用 transform 文件中的 GPS 原点高度，因此输出局部 z=0。也可以指定默认高度：
-
-    ros2 run g60_driver g60_transform_convert --transform data/gps_odom_transform.txt --input-file data/trajectories.txt --output-file data/xyz.txt --default-altitude 22.6
-
-## 离线工具 2：手动微调变换
-
-自动标定结果有偏差时，可对 transform TXT 和对应 OVJSN 成对微调。
-
-    ros2 run g60_driver g60_transform_adjust --ovjsn-input data/fix_from_odom_trajectory.ovjsn --transform-input data/gps_odom_transform.txt --ovjsn-output data/fix_from_odom_trajectory_adjusted.ovjsn --transform-output data/gps_odom_transform_adjusted.txt --dx 0.5 --dy -0.2 --yaw-deg 1.5
-
-参数含义：
-
-- dx: world X 方向平移修正，单位米
-- dy: world Y 方向平移修正，单位米
-- yaw-deg: world 平面旋转修正，单位度
-
-输出的 adjusted OVJSN 和 adjusted TXT 是匹配的一对；原始文件不会被覆盖。
-
-## 输出文件
-
-运行输出默认写入源码包 data/：
-
-- data/gps_trajectory.ovjsn
-- data/fix_odom_trajectory.ovjsn
-- data/fix_from_odom_trajectory.ovjsn
-- data/gps_odom_transform.txt
-- data/gps_odom_transform_adjusted.txt
-- data/xyz.txt
-
-这些文件是运行产物，默认不纳入 git，也不会作为包资源安装；安装时只保留 data/.gitkeep 以创建目录。
-
-## 常见问题
-
-### /fix_from_odom 没有输出
-
-检查：
-
-    ros2 topic info -v /odometry_horizon
-    ros2 topic echo /fix_from_odom --once
-
-g60_transform 使用 qos_profile_sensor_data 订阅 /odometry_horizon，可接收常见的 Best Effort 里程计发布端。
-
-### /set_gps_goal 返回 action server 未就绪
-
-说明 /multi_map_navigate_to_pose 尚未启动或名称不一致。检查：
-
-    ros2 action list | grep multi_map_navigate_to_pose
-
-### 标定结果偏移
-
-先确认 30 组样本中车辆有实际运动，且 GPS 与里程计时间戳接近。若仍有小偏差，使用 g60_transform_adjust 生成 adjusted TXT，并让 config/g60_transform.yaml 读取 adjusted 文件。
-
-## 术语
-
-- GGA：定位、卫星数、定位质量和 HDOP。
-- RMC：定位有效性、地面速度、地面航向、日期和时间。
-- VTG：对地速度和对地航向。
-- HDT：真北航向。
-- ENU：East、North、Up，即东、北、上；本包用它把经纬度换算为局部米制坐标。
+- G90 的 GPS 周/周内秒、位置、位置标准差和速度来自 UM982 专有报文；定位质量、定位类型和卫星数优先来自同一串口的 GGA；`$GNHPR` 的航向/俯仰写入 `UniRtkPvh.heading`。原始报文没有提供或当前参考驱动未证明来源的字段保持 `0`、`NaN` 或“未解算”，不伪造 RTK fixed 状态。
+- `/fix` 是接收机自身定位结果，不是融合定位；`/fix_odom`、`/fix_from_odom` 是由里程计和变换反算的 GPS。
+- ENU 使用局部小范围近似，适合车辆作业区域，不适合跨大区域测量。

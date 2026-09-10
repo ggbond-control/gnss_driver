@@ -30,7 +30,7 @@ def _write_json(path, document):
     path = os.path.expanduser(path)
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
-    descriptor, temporary_path = tempfile.mkstemp(prefix='.g60_adjust_', suffix='.tmp', dir=directory)
+    descriptor, temporary_path = tempfile.mkstemp(prefix='.gnss_adjust_', suffix='.tmp', dir=directory)
     try:
         with os.fdopen(descriptor, 'w', encoding='utf-8-sig', newline='\r\n') as stream:
             json.dump(document, stream, ensure_ascii=False, indent=4)

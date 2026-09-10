@@ -1,0 +1,21 @@
+gnss_device:
+  ros__parameters:
+    # 设备类型：非RTK普通GNSS（NMEA解析，仅输出 /fix，不输出 /rtk_pvh）
+    is_rtk: false
+
+    # 串口连接参数（QinHeng USB 串口）
+    port: /dev/wheeltec_gnss
+    baud: 9600
+    timeout_sec: 0.1
+    reconnect_sec: 2.0
+
+    # 坐标系与发布话题
+    frame_id: gps
+    fix_topic: /fix
+
+    # NMEA 专有参数
+    time_ref_source: gnss
+    use_rmc_fix: false
+    publish_raw_nmea: false
+    raw_nmea_topic: /nmea_sentence
+

@@ -16,6 +16,8 @@ class Gga:
     hdop: float
     fix_quality: int
     utc_seconds: Optional[float]
+    satellites: int = 0
+    differential_age_s: float = math.nan
 
 
 @dataclass(frozen=True)
@@ -121,7 +123,8 @@ def parse(sentence: str):
             return Gga(-latitude if fields[3] == 'S' else latitude,
                        -longitude if fields[5] == 'W' else longitude,
                        _float(fields[9]), _float(fields[11]), _float(fields[8]),
-                       _int(fields[6]), _time_of_day(fields[1]))
+                       _int(fields[6]), _time_of_day(fields[1]), _int(fields[7]),
+                       _float(fields[13]) if len(fields) > 13 else math.nan)
         if sentence_type == 'RMC':
             latitude, longitude = _latitude(fields[3]), _longitude(fields[5])
             return Rmc(-latitude if fields[4] == 'S' else latitude,

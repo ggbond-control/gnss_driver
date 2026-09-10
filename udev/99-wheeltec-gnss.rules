@@ -1,0 +1,2 @@
+# WHEELTEC GNSS (G60 / G70 / G90): QinHeng Electronics USB Serial (1a86:55d4)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", MODE:="0666", GROUP:="dialout", SYMLINK+="wheeltec_gnss"

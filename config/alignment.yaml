@@ -1,0 +1,19 @@
+gnss_alignment:
+  ros__parameters:
+    fix_topic: /fix
+    rtk_topic: ''
+    rtk_frame_id: gps
+    rtk_fix_topic: /fix_from_rtk
+    odom_topic: /odometry_horizon
+    fix_odom_topic: /fix_odom
+    fix_odom_frame_id: gps
+    output_frame: world
+    transform_path: ''
+    max_time_delta: 0.15
+    calibration_pairs: 30
+    min_calibration_displacement: 1.0
+    max_points: 10000
+    use_weighted_fit: false
+    fit_iterations: 15
+    huber_delta: 2.5
+

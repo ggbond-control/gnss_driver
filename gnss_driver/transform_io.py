@@ -15,7 +15,7 @@ def default_data_path(filename):
     if (source_root / 'package.xml').exists():
         data_directory = source_root / 'data'
     else:
-        data_directory = Path(get_package_share_directory('g60_driver')) / 'data'
+        data_directory = Path(get_package_share_directory('gnss_driver')) / 'data'
     data_directory.mkdir(parents=True, exist_ok=True)
     return str(data_directory / filename)
 
@@ -53,9 +53,10 @@ class GpsOdomTransform:
         directory = os.path.dirname(os.path.abspath(path))
         os.makedirs(directory, exist_ok=True)
         file_descriptor, temporary_path = tempfile.mkstemp(
-            prefix='.g60_transform_', suffix='.tmp', dir=directory, text=True)
+            prefix='.gnss_transform_', suffix='.tmp', dir=directory, text=True)
         try:
             with os.fdopen(file_descriptor, 'w', encoding='utf-8') as stream:
+                # Keep the v1 format identifier so existing transform files remain readable.
                 stream.write('format=g60_gps_odom_transform_v1\n')
                 stream.write('locked={}\n'.format(str(self.locked).lower()))
                 stream.write('output_frame={}\n'.format(self.output_frame))

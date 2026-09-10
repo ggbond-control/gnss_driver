@@ -9,29 +9,44 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
+from robots_dog_msgs.msg import UniRtkPvh
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_srvs.srv import Trigger
 from .transform_io import GpsOdomTransform, default_data_path
+from .rtk import rtk_to_navsat_fix
+from .estimators.se2 import fit_rigid_2d
 
 
 class GpsOdomAlignment(Node):
     def __init__(self):
-        super().__init__('g60_gps_odom_alignment')
+        super().__init__('gnss_alignment')
         self.fix_topic = self.declare_parameter('fix_topic', '/fix').value
+        self.rtk_topic = self.declare_parameter('rtk_topic', '').value
+        self.rtk_frame_id = self.declare_parameter('rtk_frame_id', 'gps').value
+        self.rtk_fix_topic = self.declare_parameter('rtk_fix_topic', '/fix_from_rtk').value
         self.odom_topic = self.declare_parameter('odom_topic', '/odometry_horizon').value
         self.output_frame = self.declare_parameter('output_frame', 'world').value
         self.fix_odom_topic = self.declare_parameter('fix_odom_topic', '/fix_odom').value
         self.fix_odom_frame_id = self.declare_parameter('fix_odom_frame_id', 'gps').value
         transform_path = self.declare_parameter('transform_path', '').value
-        self.transform_path = transform_path or default_data_path('gps_odom_transform.txt')
+        if transform_path and not os.path.isabs(os.path.expanduser(transform_path)):
+            self.transform_path = default_data_path(transform_path)
+        elif transform_path:
+            self.transform_path = os.path.expanduser(transform_path)
+        else:
+            self.transform_path = default_data_path('gps_odom_transform.txt')
+        self.get_logger().info('transform output path: {}'.format(self.transform_path))
         self.max_time_delta = self.declare_parameter('max_time_delta', 0.15).value
         self.calibration_pairs = self.declare_parameter('calibration_pairs', 30).value
         self.min_calibration_displacement = self.declare_parameter(
             'min_calibration_displacement', 1.0).value
         self.max_points = self.declare_parameter('max_points', 10000).value
+        self.use_weighted_fit = self.declare_parameter('use_weighted_fit', False).value
+        self.fit_iterations = self.declare_parameter('fit_iterations', 15).value
+        self.huber_delta = self.declare_parameter('huber_delta', 2.5).value
         self.gps_buffer = deque(maxlen=200)
         self.odom_buffer = deque(maxlen=500)
         self.calibration_samples = []
@@ -45,10 +60,26 @@ class GpsOdomAlignment(Node):
         self.odom_pub = self.create_publisher(Path, 'odometry_trajectory', 10)
         self.aligned_pose_pub = self.create_publisher(PoseStamped, 'gps_pose_aligned', 10)
         self.fix_odom_pub = self.create_publisher(NavSatFix, self.fix_odom_topic, 10)
+        self.rtk_fix_pub = (self.create_publisher(NavSatFix, self.rtk_fix_topic, 10)
+                            if self.rtk_topic and self.rtk_fix_topic else None)
         # Sensor publishers often use BEST_EFFORT; this profile also accepts RELIABLE inputs.
-        self.create_subscription(NavSatFix, self.fix_topic, self._on_fix, qos_profile_sensor_data)
+        if self.fix_topic:
+            self.create_subscription(NavSatFix, self.fix_topic, self._on_fix, qos_profile_sensor_data)
+        if self.rtk_topic:
+            self.create_subscription(UniRtkPvh, self.rtk_topic, self._on_rtk, qos_profile_sensor_data)
         self.create_subscription(Odometry, self.odom_topic, self._on_odom, qos_profile_sensor_data)
         self.create_service(Trigger, 'reset_alignment', self._reset)
+
+    def _on_rtk(self, message):
+        fix = rtk_to_navsat_fix(message, self.rtk_frame_id)
+        if fix is None:
+            self.get_logger().warning(
+                'ignoring UniRtkPvh without a solved finite position (p_sol_status={})'.format(
+                    message.bestnav.p_sol_status), throttle_duration_sec=5.0)
+            return
+        if self.rtk_fix_pub is not None:
+            self.rtk_fix_pub.publish(fix)
+        self._on_fix(fix)
 
     def _new_path(self):
         path = Path()
@@ -85,7 +116,8 @@ class GpsOdomAlignment(Node):
             self.gps_origin = (message.latitude, message.longitude, message.altitude)
             self.get_logger().info('GPS local origin set')
         point = self._gps_to_local(message)
-        self.gps_buffer.append((self._stamp(message), point, message.header.stamp))
+        self.gps_buffer.append((self._stamp(message), point, message.header.stamp,
+                                self._fix_covariance(message)))
         if self.transform is None:
             self._try_pair()
         if self.transform is not None:
@@ -139,7 +171,7 @@ class GpsOdomAlignment(Node):
     def _try_pair(self):
         if self.transform is not None or not self.gps_buffer or not self.odom_buffer:
             return
-        for gps_stamp, gps_point, ros_stamp in self.gps_buffer:
+        for gps_stamp, gps_point, ros_stamp, gps_covariance in self.gps_buffer:
             if gps_stamp in self.paired_gps_stamps:
                 continue
             odom_stamp, odom_point = min(self.odom_buffer, key=lambda item: abs(item[0] - gps_stamp))
@@ -148,8 +180,12 @@ class GpsOdomAlignment(Node):
             if not self._is_calibration_motion(gps_point, odom_point):
                 self.paired_gps_stamps.append(gps_stamp)
                 continue
-            self.calibration_samples.append((gps_point, odom_point))
+            self.calibration_samples.append((gps_point, odom_point, gps_covariance))
             self.paired_gps_stamps.append(gps_stamp)
+            if len(self.calibration_samples) == 1 or len(self.calibration_samples) % 10 == 0:
+                self.get_logger().info(
+                    'calibration progress: {}/{} moving pairs'.format(
+                        len(self.calibration_samples), self.calibration_pairs))
             if len(self.calibration_samples) == self.calibration_pairs:
                 self._lock_transform(ros_stamp)
                 return
@@ -157,7 +193,7 @@ class GpsOdomAlignment(Node):
     def _is_calibration_motion(self, gps_point, odom_point):
         if not self.calibration_samples:
             return True
-        previous_gps, previous_odom = self.calibration_samples[-1]
+        previous_gps, previous_odom = self.calibration_samples[-1][:2]
         gps_distance = np.linalg.norm(gps_point - previous_gps)
         odom_distance = np.linalg.norm(odom_point - previous_odom)
         return (gps_distance >= self.min_calibration_displacement and
@@ -166,15 +202,67 @@ class GpsOdomAlignment(Node):
     def _fit_transform(self):
         gps = np.array([pair[0] for pair in self.calibration_samples])
         odom = np.array([pair[1] for pair in self.calibration_samples])
-        gps_center = gps.mean(axis=0)
-        odom_center = odom.mean(axis=0)
-        covariance = (gps - gps_center).T @ (odom - odom_center)
-        u, _, vt = np.linalg.svd(covariance)
-        rotation = vt.T @ u.T
-        if np.linalg.det(rotation) < 0:
-            vt[-1, :] *= -1
-            rotation = vt.T @ u.T
-        return rotation, odom_center - rotation @ gps_center
+        if self.use_weighted_fit:
+            return self._fit_weighted(gps, odom)
+        return self._fit_unweighted(gps, odom)
+
+    @staticmethod
+    def _fit_unweighted(gps, odom):
+        return fit_rigid_2d(gps, odom)
+
+    @staticmethod
+    def _fix_covariance(message):
+        if message.position_covariance_type == NavSatFix.COVARIANCE_TYPE_UNKNOWN:
+            return None
+        covariance = np.array([
+            [message.position_covariance[0], message.position_covariance[1]],
+            [message.position_covariance[3], message.position_covariance[4]],
+        ], dtype=float)
+        if not np.isfinite(covariance).all() or np.any(np.diag(covariance) <= 0.0):
+            return None
+        return covariance
+
+    def _fit_weighted(self, gps, odom):
+        """Robust Mahalanobis weighted least-squares fit of yaw and translation."""
+        rotation, translation = self._fit_unweighted(gps, odom)
+        theta = math.atan2(rotation[1, 0], rotation[0, 0])
+        covariances = [pair[2] for pair in self.calibration_samples]
+        for _ in range(max(1, int(self.fit_iterations))):
+            cos_theta, sin_theta = math.cos(theta), math.sin(theta)
+            current_rotation = np.array([[cos_theta, -sin_theta],
+                                         [sin_theta, cos_theta]])
+            normal = np.zeros((3, 3), dtype=float)
+            rhs = np.zeros(3, dtype=float)
+            for gps_point, odom_point, covariance in zip(gps, odom, covariances):
+                predicted = current_rotation @ gps_point + translation
+                residual = odom_point - predicted
+                derivative = np.array([
+                    -sin_theta * gps_point[0] - cos_theta * gps_point[1],
+                     cos_theta * gps_point[0] - sin_theta * gps_point[1]], dtype=float)
+                jacobian = np.column_stack((derivative, -np.eye(2)))
+                if covariance is None:
+                    weight = np.eye(2)
+                else:
+                    world_covariance = current_rotation @ covariance @ current_rotation.T
+                    weight = np.linalg.pinv(world_covariance)
+                mahalanobis = math.sqrt(max(0.0, float(residual.T @ weight @ residual)))
+                robust_weight = (1.0 if mahalanobis <= self.huber_delta
+                                 else self.huber_delta / mahalanobis)
+                weight *= robust_weight
+                normal += jacobian.T @ weight @ jacobian
+                rhs += jacobian.T @ weight @ residual
+            try:
+                delta = np.linalg.solve(normal, rhs)
+            except np.linalg.LinAlgError:
+                self.get_logger().warning('weighted fit is rank deficient; using unweighted fit')
+                return self._fit_unweighted(gps, odom)
+            theta += float(delta[0])
+            translation += delta[1:]
+            if np.linalg.norm(delta) < 1e-8:
+                break
+        self.get_logger().info('weighted robust least-squares fit completed')
+        return np.array([[math.cos(theta), -math.sin(theta)],
+                         [math.sin(theta), math.cos(theta)]]), translation
 
     def _lock_transform(self, stamp):
         self.transform = self._fit_transform()
@@ -182,7 +270,7 @@ class GpsOdomAlignment(Node):
         self.get_logger().info(
             'alignment locked with {} moving GPS/odometry pairs'.format(self.calibration_pairs))
         self.gps_path = self._new_path()
-        for gps_point, _ in self.calibration_samples:
+        for gps_point, _, _ in self.calibration_samples:
             self._append_aligned_point(gps_point, stamp)
         self._publish_paths()
 

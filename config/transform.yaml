@@ -1,8 +1,13 @@
-g60_transform:
+gnss_transform:
   ros__parameters:
-    transform_path: '~/Workspace/driver_ws/src/g60_driver/data/gps_odom_transform_adjusted.txt'
+    transform_path: ''
     input_topic: /odometry_horizon
     output_topic: /fix_from_odom
+    rtk_topic: ''
+    rtk_output_topic: /odometry_from_rtk
+    rtk_fix_topic: /fix_from_rtk
+    rtk_frame_id: gps
+    rtk_child_frame_id: rtk_gps
     enable_gps_goal_action: true
     gps_goal_action: /set_gps_goal
     navigation_action: /multi_map_navigate_to_pose
@@ -11,10 +16,3 @@ g60_transform:
     next_goal_policy_wait_sec: 5.0
     action_result_timeout_sec: 0.0
 
-g60_fix_from_odom_to_polyline:
-  ros__parameters:
-    fix_topic: /fix_from_odom
-    output_filename: fix_from_odom_trajectory.ovjsn
-    max_points: 100000
-    polyline_name: fix_from_odom
-    reset_service: reset_polyline_fix_from_odom
