@@ -40,6 +40,12 @@ class G90DriverNode(BaseSerialGnssNode):
     def __init__(self):
         super().__init__(node_name='gnss_device', default_baud=115200, default_is_rtk=True)
 
+    def setup_subclass(self) -> None:
+        self.latest = None
+        self.velocity = None
+        self.heading = None
+        self.gga = None
+
         self.odom_topic = self.declare_parameter('odom_topic', '/odometry_from_g90').value
         self.publish_navsat_fix = self.declare_parameter('publish_navsat_fix', True).value
         self.configure_hardware = self.declare_parameter('configure_hardware', True).value
@@ -77,11 +83,6 @@ class G90DriverNode(BaseSerialGnssNode):
         )
         for cmd in commands:
             self.send_command(cmd)
-
-        self.latest = None
-        self.velocity = None
-        self.heading = None
-        self.gga = None
 
     def handle_line(self, line: str) -> None:
         if line.startswith('#PVTSLNA'):

@@ -31,9 +31,15 @@ class BaseSerialGnssNode(BaseGnssNode):
         self.serial = None
         self._rx_buffer = bytearray()
         self.next_connect_ns = 0
-        self.timer = self.create_timer(0.01, self._poll)
 
+        self.setup_subclass()
+
+        self.timer = self.create_timer(0.01, self._poll)
         self._connect()
+
+    def setup_subclass(self) -> None:
+        """Hook for subclasses to declare parameters, publishers, and state before serial connection."""
+        pass
 
     def _connect(self):
         try:

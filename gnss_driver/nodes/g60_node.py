@@ -25,6 +25,7 @@ class G60DriverNode(BaseSerialGnssNode):
     def __init__(self):
         super().__init__(node_name='gnss_device', default_baud=9600, default_is_rtk=False)
 
+    def setup_subclass(self) -> None:
         self.use_rmc_fix = self.declare_parameter('use_rmc_fix', False).value
         self.time_ref_source = self.declare_parameter('time_ref_source', 'gps').value
         self.publish_raw_nmea = self.declare_parameter('publish_raw_nmea', False).value

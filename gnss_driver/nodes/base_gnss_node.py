@@ -23,7 +23,8 @@ class BaseGnssNode(Node):
         self.frame_id = self.declare_parameter('frame_id', 'gps').value
         self.fix_topic = self.declare_parameter('fix_topic', '/fix').value
         self.is_rtk = self.declare_parameter('is_rtk', default_is_rtk).value
-        self.publish_heading_gnss = self.declare_parameter('publish_heading_gnss', True).value
+        self.rtk_topic = self.declare_parameter('rtk_topic', '/rtk_pvh').value
+        self.enable_heading_gnss = self.declare_parameter('publish_heading_gnss', True).value
         self.heading_gnss_topic = self.declare_parameter('heading_gnss_topic', '/heading_gnss').value
 
         self.fix_pub = self.create_publisher(NavSatFix, self.fix_topic, 10)
@@ -33,7 +34,7 @@ class BaseGnssNode(Node):
         )
         self.heading_gnss_pub = (
             self.create_publisher(Imu, self.heading_gnss_topic, 10)
-            if self.publish_heading_gnss and self.heading_gnss_topic else None
+            if self.enable_heading_gnss and self.heading_gnss_topic else None
         )
 
     def publish_fix(
