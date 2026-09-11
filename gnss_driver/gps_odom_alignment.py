@@ -17,7 +17,7 @@ from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_srvs.srv import Trigger
 from .transform_io import GpsOdomTransform, default_data_path
 from .rtk import rtk_to_navsat_fix
-from .estimators.se2 import fit_rigid_2d
+from .estimators.se2 import fit_rigid_2d, fit_rigid_2d_weighted
 
 
 class GpsOdomAlignment(Node):
@@ -224,45 +224,13 @@ class GpsOdomAlignment(Node):
 
     def _fit_weighted(self, gps, odom):
         """Robust Mahalanobis weighted least-squares fit of yaw and translation."""
-        rotation, translation = self._fit_unweighted(gps, odom)
-        theta = math.atan2(rotation[1, 0], rotation[0, 0])
         covariances = [pair[2] for pair in self.calibration_samples]
-        for _ in range(max(1, int(self.fit_iterations))):
-            cos_theta, sin_theta = math.cos(theta), math.sin(theta)
-            current_rotation = np.array([[cos_theta, -sin_theta],
-                                         [sin_theta, cos_theta]])
-            normal = np.zeros((3, 3), dtype=float)
-            rhs = np.zeros(3, dtype=float)
-            for gps_point, odom_point, covariance in zip(gps, odom, covariances):
-                predicted = current_rotation @ gps_point + translation
-                residual = odom_point - predicted
-                derivative = np.array([
-                    -sin_theta * gps_point[0] - cos_theta * gps_point[1],
-                     cos_theta * gps_point[0] - sin_theta * gps_point[1]], dtype=float)
-                jacobian = np.column_stack((derivative, -np.eye(2)))
-                if covariance is None:
-                    weight = np.eye(2)
-                else:
-                    world_covariance = current_rotation @ covariance @ current_rotation.T
-                    weight = np.linalg.pinv(world_covariance)
-                mahalanobis = math.sqrt(max(0.0, float(residual.T @ weight @ residual)))
-                robust_weight = (1.0 if mahalanobis <= self.huber_delta
-                                 else self.huber_delta / mahalanobis)
-                weight *= robust_weight
-                normal += jacobian.T @ weight @ jacobian
-                rhs += jacobian.T @ weight @ residual
-            try:
-                delta = np.linalg.solve(normal, rhs)
-            except np.linalg.LinAlgError:
-                self.get_logger().warning('weighted fit is rank deficient; using unweighted fit')
-                return self._fit_unweighted(gps, odom)
-            theta += float(delta[0])
-            translation += delta[1:]
-            if np.linalg.norm(delta) < 1e-8:
-                break
+        rotation, translation = fit_rigid_2d_weighted(
+            gps, odom, covariances=covariances,
+            huber_delta=self.huber_delta,
+            max_iterations=self.fit_iterations)
         self.get_logger().info('weighted robust least-squares fit completed')
-        return np.array([[math.cos(theta), -math.sin(theta)],
-                         [math.sin(theta), math.cos(theta)]]), translation
+        return rotation, translation
 
     def _lock_transform(self, stamp):
         self.transform = self._fit_transform()
