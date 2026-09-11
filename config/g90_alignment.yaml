@@ -1,8 +1,7 @@
 gnss_alignment:
   ros__parameters:
-    # 消费来自 d1m_bridge 的标准 /fix 话题（携带真实 RTK 协方差）
     fix_topic: /fix
-    rtk_topic: ''
+    rtk_topic: /rtk_pvh
     rtk_frame_id: gps
     rtk_fix_topic: /fix_from_rtk
     odom_topic: /odometry_horizon
@@ -11,9 +10,9 @@ gnss_alignment:
     output_frame: world
 
     # 标定变换结果输出文件（相对文件名自动解析至包内 data/ 目录）
-    transform_path: 'd1m_gps_odom_transform.txt'
+    transform_path: 'g90_gps_odom_transform.txt'
 
-    # D1M RTK 高精定位参数（200对样本、利用真实协方差进行 Huber 加权拟合）
+    # G90 (和芯星通 UM982) RTK 高精定位参数（200对样本、利用真实协方差进行 Huber 加权拟合）
     max_time_delta: 0.15
     calibration_pairs: 200
     min_calibration_displacement: 1.0

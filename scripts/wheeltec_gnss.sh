@@ -17,10 +17,13 @@ while [ -h "$target" ]; do
   esac
 done
 script_dir="$(cd -P -- "$(dirname -- "$target")" && pwd)"
-rules_file="${script_dir}/../udev/99-wheeltec-gnss.rules"
 
-if [ ! -f "$rules_file" ]; then
-  echo "Error: rules file not found at $rules_file"
+if [ -f "${script_dir}/udev/99-wheeltec-gnss.rules" ]; then
+  rules_file="${script_dir}/udev/99-wheeltec-gnss.rules"
+elif [ -f "${script_dir}/../udev/99-wheeltec-gnss.rules" ]; then
+  rules_file="${script_dir}/../udev/99-wheeltec-gnss.rules"
+else
+  echo "Error: rules file not found (searched ${script_dir}/udev and ${script_dir}/../udev)"
   exit 1
 fi
 

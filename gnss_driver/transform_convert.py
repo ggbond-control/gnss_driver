@@ -32,7 +32,7 @@ def _convert_file(transform, input_path, output_path, default_altitude):
 
 
 def main(args=None):
-    parser = argparse.ArgumentParser(description='Convert GPS LLA and world XYZ using a g60 transform file.')
+    parser = argparse.ArgumentParser(description='Convert GPS LLA and world XYZ using a GNSS transform file.')
     parser.add_argument('--transform', required=True, help='path to gps_odom_transform.txt')
     parser.add_argument('--input-file', help='GPS text file: longitude,latitude[,altitude] per line')
     parser.add_argument('--output-file', help='XYZ text file: x,y,z per line')
