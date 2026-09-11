@@ -40,11 +40,34 @@ class BaseSerialGnssNode(BaseGnssNode):
             import serial
             self.serial = serial.Serial(self.port, self.baud, timeout=0)
             self._rx_buffer = bytearray()
+            try:
+                self.serial.reset_input_buffer()
+                self.serial.reset_output_buffer()
+            except Exception:
+                pass
             self.get_logger().info(f'connected to {self.port} at {self.baud} baud')
+            self.on_connected()
         except Exception as exc:
             self.get_logger().warning(f'cannot open {self.port}: {exc}')
             now_ns = self.get_clock().now().nanoseconds
             self.next_connect_ns = now_ns + int(self.reconnect_sec * 1e9)
+
+    def on_connected(self) -> None:
+        """Hook called immediately after a successful serial connection."""
+        pass
+
+    def send_command(self, cmd: str) -> bool:
+        """Send a single ASCII command line followed by CRLF to the serial device."""
+        if self.serial and self.serial.is_open:
+            try:
+                if not cmd.endswith('\r\n'):
+                    cmd = cmd.strip() + '\r\n'
+                self.serial.write(cmd.encode('ascii'))
+                self.serial.flush()
+                return True
+            except Exception as e:
+                self.get_logger().warning(f'failed to send command {cmd.strip()}: {e}')
+        return False
 
     def _poll(self):
         if self.serial is None:

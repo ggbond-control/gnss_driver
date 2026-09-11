@@ -9,10 +9,17 @@ gnss_device:
     timeout_sec: 0.1
     reconnect_sec: 2.0
 
+    # 硬件启动自动配置（关闭 GSV/GSA 冗余报文，解算与输出自动提升至 10Hz）
+    configure_hardware: true
+    hardware_rate_hz: 10.0
+    unlog_debug_sentences: true
+
     # 坐标系与发布话题
     frame_id: gps
     fix_topic: /fix
     rtk_topic: /rtk_pvh
     odom_topic: /odometry_from_g90
     publish_navsat_fix: true
+    publish_heading_gnss: true
+    heading_gnss_topic: /heading_gnss
 

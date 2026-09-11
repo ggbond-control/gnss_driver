@@ -51,6 +51,15 @@ class D1MBridgeNode(BaseGnssNode):
             stamp=message.header.stamp,
         )
 
+        if message.heading.sol_status == 0 and math.isfinite(message.heading.heading_deg):
+            std = message.heading.heading_std if math.isfinite(message.heading.heading_std) else None
+            self.publish_heading_gnss(
+                heading_deg=message.heading.heading_deg,
+                pitch_deg=message.heading.pitch_deg,
+                heading_std_deg=std,
+                stamp=message.header.stamp,
+            )
+
 
 def main(args=None):
     rclpy.init(args=args)

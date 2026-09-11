@@ -7,3 +7,5 @@ gnss_device:
     frame_id: gps
     fix_topic: /fix
     rtk_topic: /rtk_pvh
+    publish_heading_gnss: true
+    heading_gnss_topic: /heading_gnss

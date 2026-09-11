@@ -42,8 +42,41 @@ class G90DriverNode(BaseSerialGnssNode):
 
         self.odom_topic = self.declare_parameter('odom_topic', '/odometry_from_g90').value
         self.publish_navsat_fix = self.declare_parameter('publish_navsat_fix', True).value
+        self.configure_hardware = self.declare_parameter('configure_hardware', True).value
+        self.hardware_rate_hz = self.declare_parameter('hardware_rate_hz', 10.0).value
+        self.unlog_debug_sentences = self.declare_parameter('unlog_debug_sentences', True).value
 
         self.odom_pub = self.create_publisher(Odometry, self.odom_topic, 10)
+
+    def on_connected(self) -> None:
+        """Send startup commands to Unicore UM982 / G90 to silence spam and boost rate."""
+        if not getattr(self, 'configure_hardware', True):
+            return
+
+        rate = max(1.0, min(20.0, float(getattr(self, 'hardware_rate_hz', 10.0))))
+        period = f"{1.0 / rate:.2f}".rstrip('0').rstrip('.')
+        if period in ('', '0'):
+            period = '0.05' if rate >= 20.0 else '0.1'
+
+        commands = []
+        if getattr(self, 'unlog_debug_sentences', True):
+            # Silence high-bandwidth debug/satellite view spam that exhausts 115200 baud
+            commands.extend(['UNLOGGSV', 'UNLOGGSA', 'UNLOGRMC'])
+
+        # Configure high-rate navigation sentences on both default port and COM1
+        for prefix in ('', 'COM1 '):
+            commands.extend([
+                f'PVTSLNA {prefix}{period}',
+                f'GNHPR {prefix}{period}',
+                f'BESTNAVA {prefix}{period}',
+                f'GNGGA {prefix}{period}',
+            ])
+
+        self.get_logger().info(
+            f'Auto-configuring G90 hardware: unlogging GSV/GSA spam, setting rate to {rate} Hz (period {period}s)...'
+        )
+        for cmd in commands:
+            self.send_command(cmd)
 
         self.latest = None
         self.velocity = None
@@ -286,6 +319,14 @@ class G90DriverNode(BaseSerialGnssNode):
             rtk.heading.soln_svs_num = 0
 
         self.publish_rtk(rtk)
+
+        if rtk.heading.sol_status == 0 and math.isfinite(heading_deg):
+            self.publish_heading_gnss(
+                heading_deg=heading_deg,
+                pitch_deg=pitch_deg,
+                roll_deg=roll_deg,
+                stamp=header.stamp,
+            )
 
         # 4. Assemble and Publish Odometry (/odometry_from_g90)
         odom = Odometry()
