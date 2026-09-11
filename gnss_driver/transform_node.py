@@ -126,6 +126,9 @@ class TransformNode(Node):
         if not all(math.isfinite(value) for value in xyz):
             self.get_logger().warning('ignoring non-finite odometry position')
             return
+        if not hasattr(self, '_first_odom_logged'):
+            self._first_odom_logged = True
+            self.get_logger().info('active conversion: odometry -> /fix_from_odom running normally')
         self._publish_gps_tf(message)
         latitude, longitude, altitude = self.transform.world_to_gps_lla(*xyz)
         fix = NavSatFix()
@@ -142,10 +145,21 @@ class TransformNode(Node):
     def _on_rtk(self, message):
         fix = rtk_to_navsat_fix(message, self.rtk_frame_id)
         if fix is None:
+            status = message.bestnav.p_sol_status
+            status_desc = {
+                0: 'SOL_COMPUTED',
+                1: 'INSUFFICIENT_OBS (未搜到足够卫星/无有效定位解)',
+                2: 'NO_CONVERGENCE (解算未收敛)',
+                3: 'SINGULARITY (矩阵奇异)',
+                6: 'COLD_START (冷启动搜星中)',
+            }.get(status, f'STATUS_{status}')
             self.get_logger().warning(
-                'ignoring UniRtkPvh without a solved finite position (p_sol_status={})'.format(
-                    message.bestnav.p_sol_status), throttle_duration_sec=5.0)
+                f'ignoring UniRtkPvh without a solved position (p_sol_status={status}: {status_desc})',
+                throttle_duration_sec=5.0)
             return
+        if not hasattr(self, '_first_rtk_logged'):
+            self._first_rtk_logged = True
+            self.get_logger().info('valid RTK position received (p_sol_status=0), publishing to /odometry_from_rtk')
         if self.rtk_fix_pub is not None:
             self.rtk_fix_pub.publish(fix)
         x, y, z = self.transform.gps_lla_to_world(
