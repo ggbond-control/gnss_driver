@@ -1,2 +1,5 @@
-# WHEELTEC GNSS (G60 / G70 / G90): QinHeng Electronics USB Serial (1a86:55d4)
+# WHEELTEC GNSS 主串口 (G60 / G70 / G90): QinHeng Electronics USB Serial (1a86:55d4)
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", MODE:="0666", GROUP:="dialout", SYMLINK+="wheeltec_gnss"
+
+# WHEELTEC G90 RTK 差分注入串口 (CH340 232转USB): QinHeng CH340 (1a86:7523)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", MODE:="0666", GROUP:="dialout", SYMLINK+="wheeltec_rtk"

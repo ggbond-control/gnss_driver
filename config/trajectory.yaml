@@ -1,7 +1,7 @@
 gnss_trajectory:
   ros__parameters:
-    fix_topic: /fix
-    output_filename: gps_trajectory.ovjsn
+    fix_topic: /fix_from_odom
+    output_filename: gps_trajectory1.ovjsn
     max_points: 100000
     polyline_name: fix
     reset_service: reset_polyline

@@ -3,6 +3,5 @@
 build/
 install/
 log/
-data/*.ovjsn
-data/*.txt
+data/*
 .vscode/

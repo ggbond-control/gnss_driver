@@ -30,4 +30,4 @@ fi
 install -m 0644 "$rules_file" /etc/udev/rules.d/99-wheeltec-gnss.rules
 udevadm control --reload-rules
 udevadm trigger --subsystem-match=tty
-echo "Installed 99-wheeltec-gnss.rules. /dev/wheeltec_gnss symlinks are now configured."
+echo "Installed 99-wheeltec-gnss.rules. /dev/wheeltec_gnss and /dev/wheeltec_rtk symlinks are now configured."

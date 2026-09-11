@@ -34,6 +34,7 @@ setup(
             'gnss_transform = gnss_driver.transform_node:main',
             'gnss_transform_convert = gnss_driver.transform_convert:main',
             'gnss_transform_adjust = gnss_driver.transform_adjust:main',
+            'ntrip_client = gnss_driver.nodes.ntrip_client_node:main',
             # Compatibility aliases
             'gnss_serial = gnss_driver.nodes.g60_node:main',
             'gnss_g90_serial = gnss_driver.nodes.g90_node:main',

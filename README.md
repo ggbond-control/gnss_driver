@@ -29,9 +29,10 @@ G60/NMEA、G90/Unicore、D1M/UniRtkPvh
   - `g60_node.py`：G60 单天线 NMEA 驱动（`G60DriverNode`）。
   - `g90_node.py`：G90 双天线 RTK Unicore/NMEA 驱动（`G90DriverNode`）。
   - `d1m_bridge_node.py`：D1M RTK 话题转发桥接（`D1MBridgeNode`，无串口依赖）。
-- `gnss_driver/adapters`：专用硬件协议解析（如 `g90_unicore.py`）。
+  - `ntrip_client_node.py`：Linux 原生 NTRIP 客户端，连接 CORS 并将 RTCM3 注入到 G90 UART2。
+- `gnss_driver/adapters`：专用硬件与网络协议解析（`g90_unicore.py`、`ntrip.py`）。
 - `gnss_driver/coordinates`、`estimators`：ENU 和 SE(2) 拟合算法。
-- `config/devices`：各设备驱动参数（`g60.yaml`、`g90.yaml`、`d1m.yaml`）；`config/*_alignment.yaml` 与 `config/*_transform.yaml`：各设备专用的对齐与变换参数；`trajectory.yaml`：轨迹记录配置。
+- `config/devices`：各设备驱动参数；`config/*_alignment.yaml` 与 `config/*_transform.yaml`：对齐与变换参数；`config/ntrip.yaml`：CORS 差分基准站配置；`trajectory.yaml`：轨迹记录配置。
 - `launch`：通用 `driver.launch.py`、`alignment.launch.py`、`transform.launch.py`。
 - `data`：标定变换与轨迹文件（详见 `data/README.md`）。
 
@@ -58,7 +59,17 @@ ros2 launch gnss_driver driver.launch.py device:=g60
 G90 串口驱动（UM982 双天线 RTK 高精度终端，亦可通过 `ros2 run gnss_driver g90_driver` 独立运行）：
 
 ```zsh
+# 单独启动 G90 驱动
 ros2 launch gnss_driver driver.launch.py device:=g90
+
+# 伴随启动 Linux 原生 NTRIP 客户端（自动连千寻/CORS，通过 /dev/wheeltec_rtk 注入 RTCM3 差分流）：
+ros2 launch gnss_driver driver.launch.py device:=g90 ntrip:=true
+```
+
+亦可单独运行 NTRIP 差分客户端：
+
+```zsh
+ros2 run gnss_driver ntrip_client --ros-args --params-file src/gnss_driver/config/ntrip.yaml
 ```
 
 D1M 桥接（RTK 话题桥接，亦可通过 `ros2 run gnss_driver d1m_bridge` 独立运行）：
@@ -67,8 +78,12 @@ D1M 桥接（RTK 话题桥接，亦可通过 `ros2 run gnss_driver d1m_bridge` �
 ros2 launch gnss_driver driver.launch.py device:=d1m
 ```
 
-WHEELTEC G60/G70/G90 均使用 QinHeng USB 串口（VID:PID `1a86:55d4`）。
-安装别名规则（同时创建 `/dev/wheeltec_gnss` 软链接）：
+#### 串口别名与权限配置 (udev)
+
+* 主串口（G60/G70/G90 主 Type-C 接口，`1a86:55d4`）：映射为 `/dev/wheeltec_gnss`。
+* RTK 差分注入串口（G90 串口 2 CH340 232转USB，`1a86:7523`）：映射为 `/dev/wheeltec_rtk`。
+
+安装别名规则（两端口均自动赋予 `0666` 免提权权限）：
 
 ```zsh
 # 在包源码根目录或安装目录下直接执行：
@@ -76,7 +91,7 @@ sudo sh wheeltec_gnss.sh
 sudo usermod -aG dialout "$USER"
 ```
 
-重新插拔设备或重新登录后生效。
+重新插拔设备或重新登录后生效。可以通过 `ls -l /dev/wheeltec_*` 验证软链接。
 
 ### 2. GPS/里程计对齐
 

@@ -1,0 +1,27 @@
+ntrip_client:
+  ros__parameters:
+    # CORS 差分基准站连接参数
+    host: "103.143.19.54"
+    port: 8002                                # 8001: ITRF2008 / 8002: WGS84 / 8003: CGCS2000
+    mountpoint: "RTCM33GRCEJpro"               # RTCM33GRCEJpro (五星十六频) 或 RTCM32GRCpro (三星八频)
+    username: "6hhjc1021"
+    password: "37354"
+    ntrip_version: "Ntrip/2.0"
+
+    # G90 RTK 差分注入串口（UART2，通过 CH340 接入，波特率固定 115200）
+    rtk_port: "/dev/wheeltec_rtk"
+    rtk_baud: 115200
+
+    # GGA 位置回传设置（千寻/VRS 基准站需要定时接收移动站粗坐标以计算专属差分）
+    send_gga: true
+    gga_interval_sec: 2.0
+    fix_topic: "/fix"
+
+    # 室内测试参考坐标开关与经纬度（若在室内尚未搜到卫星，开启此开关将使用参考坐标向 CORS 报到，触发 RTCM3 差分流推送用于室内联调）
+    enable_fallback_coordinates: false          # 室内测试设为 true；室外实车作业可设为 false 仅使用真实卫星定位
+    fallback_latitude: 30.28892                # 室内参考纬度
+    fallback_longitude: 119.98097              # 室内参考经度
+
+    # 网络重连与诊断
+    reconnect_sec: 3.0
+    status_topic: "/ntrip/status"

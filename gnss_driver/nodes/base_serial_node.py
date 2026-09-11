@@ -29,6 +29,7 @@ class BaseSerialGnssNode(BaseGnssNode):
         self.reconnect_sec = self.declare_parameter('reconnect_sec', 2.0).value
 
         self.serial = None
+        self._rx_buffer = bytearray()
         self.next_connect_ns = 0
         self.timer = self.create_timer(0.01, self._poll)
 
@@ -37,7 +38,8 @@ class BaseSerialGnssNode(BaseGnssNode):
     def _connect(self):
         try:
             import serial
-            self.serial = serial.Serial(self.port, self.baud, timeout=self.timeout_sec)
+            self.serial = serial.Serial(self.port, self.baud, timeout=0)
+            self._rx_buffer = bytearray()
             self.get_logger().info(f'connected to {self.port} at {self.baud} baud')
         except Exception as exc:
             self.get_logger().warning(f'cannot open {self.port}: {exc}')
@@ -52,10 +54,25 @@ class BaseSerialGnssNode(BaseGnssNode):
             return
 
         try:
-            line = self.serial.readline().decode('ascii', errors='replace').strip()
-            if not line:
+            if not self.serial.is_open:
                 return
-            self.handle_line(line)
+            n = self.serial.in_waiting
+            if n <= 0:
+                return
+            chunk = self.serial.read(n)
+            if not chunk:
+                return
+            self._rx_buffer.extend(chunk)
+
+            # Safeguard buffer size
+            if len(self._rx_buffer) > 65536:
+                self._rx_buffer = self._rx_buffer[-8192:]
+
+            while b'\n' in self._rx_buffer:
+                line_bytes, self._rx_buffer = self._rx_buffer.split(b'\n', 1)
+                line = line_bytes.decode('ascii', errors='replace').strip()
+                if line:
+                    self.handle_line(line)
         except Exception as error:
             import traceback
             self.get_logger().error(f'serial read failed: {error}\n{traceback.format_exc()}')
