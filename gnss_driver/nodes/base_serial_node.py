@@ -57,7 +57,8 @@ class BaseSerialGnssNode(BaseGnssNode):
                 return
             self.handle_line(line)
         except Exception as error:
-            self.get_logger().error(f'serial read failed: {error}')
+            import traceback
+            self.get_logger().error(f'serial read failed: {error}\n{traceback.format_exc()}')
             if self.serial is not None:
                 try:
                     self.serial.close()

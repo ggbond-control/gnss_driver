@@ -1,4 +1,5 @@
 import math
+import pytest
 
 from gnss_driver.adapters import g90_unicore
 
@@ -146,6 +147,16 @@ def test_pvtslna_and_bestnava_and_gnhpr_assembly():
     assert hpr.heading_deg == 135.5
     assert hpr.pitch_deg == 2.1
     assert hpr.roll_deg == -1.2
+
+
+def test_safe_float_helper():
+    pytest.importorskip('nav_msgs')
+    from gnss_driver.nodes.g90_node import _safe_float
+    assert _safe_float(None, 0.0) == 0.0
+    assert _safe_float(math.nan, 5.0) == 5.0
+    assert _safe_float("invalid", 1.0) == 1.0
+    assert _safe_float(3.14, 0.0) == 3.14
+    assert _safe_float("12.34", 0.0) == 12.34
 
 
 

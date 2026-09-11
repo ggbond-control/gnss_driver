@@ -19,6 +19,16 @@ from ..adapters.g90_unicore import (
 from .base_serial_node import BaseSerialGnssNode
 
 
+def _safe_float(val, default=0.0):
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        return f if math.isfinite(f) else default
+    except (TypeError, ValueError):
+        return default
+
+
 class G90DriverNode(BaseSerialGnssNode):
     """Driver node for Wheeltec G90 / Unicore UM982 dual-antenna RTK receivers.
     
@@ -64,15 +74,17 @@ class G90DriverNode(BaseSerialGnssNode):
             try:
                 vtg = nmea.parse(line)
                 if isinstance(vtg, nmea.Vtg):
+                    course_rad = _safe_float(vtg.course_rad, 0.0)
+                    speed_mps = _safe_float(vtg.speed_mps, 0.0)
                     self.velocity = {
-                        'speed': vtg.speed_mps,
-                        'course': vtg.course_rad,
-                        'course_deg': math.degrees(vtg.course_rad) % 360.0,
+                        'speed': speed_mps,
+                        'course': course_rad,
+                        'course_deg': math.degrees(course_rad) % 360.0,
                         'vertical': 0.0,
                         'vertical_std': math.nan,
                         'horizontal_std': math.nan,
-                        'vel_north': vtg.speed_mps * math.cos(vtg.course_rad),
-                        'vel_east': vtg.speed_mps * math.sin(vtg.course_rad),
+                        'vel_north': speed_mps * math.cos(course_rad),
+                        'vel_east': speed_mps * math.sin(course_rad),
                         'v_sol_status': 0,
                         'vel_type': 16,
                         'utc_time_s': math.nan,
@@ -82,8 +94,9 @@ class G90DriverNode(BaseSerialGnssNode):
         elif line.startswith(('$GNHDT', '$GPHDT')):
             try:
                 hdt = nmea.parse(line)
-                if isinstance(hdt, nmea.Hdt) and not math.isnan(hdt.heading_deg):
-                    h_deg = hdt.heading_deg % 360.0
+                h_deg_raw = getattr(hdt, 'heading_deg', None)
+                if isinstance(hdt, nmea.Hdt) and h_deg_raw is not None and math.isfinite(h_deg_raw):
+                    h_deg = h_deg_raw % 360.0
                     h_rad = math.radians(h_deg)
                     from ..adapters.g90_unicore import Gnhpr
                     self.heading = Gnhpr((h_rad, 0.0, 0.0, h_deg, 0.0, 0.0))
@@ -92,9 +105,12 @@ class G90DriverNode(BaseSerialGnssNode):
 
     def _gga_to_position(self, gga: nmea.Gga):
         p_sol_status, pos_type = gga_solution(gga.fix_quality)
-        altitude = gga.altitude_msl + gga.geoid_separation
-        hdop = gga.hdop if math.isfinite(gga.hdop) else 4.0
+        alt_msl = _safe_float(gga.altitude_msl, 0.0)
+        geoid = _safe_float(gga.geoid_separation, 0.0)
+        altitude = alt_msl + geoid
+        hdop = gga.hdop if (gga.hdop is not None and math.isfinite(gga.hdop)) else 4.0
         std = max(0.02, hdop * 0.1 if gga.fix_quality in (4, 5) else hdop * 2.0)
+        utc_s = nmea.epoch_seconds(None, gga.utc_seconds) if gga.utc_seconds is not None else None
         return {
             'latitude': gga.latitude,
             'longitude': gga.longitude,
@@ -102,14 +118,14 @@ class G90DriverNode(BaseSerialGnssNode):
             'latitude_std': std,
             'longitude_std': std,
             'altitude_std': std * 2.0,
-            'undulation': gga.geoid_separation,
-            'svs_num': gga.satellites,
-            'soln_svs_num': gga.satellites,
-            'diff_age_s': gga.differential_age_s,
+            'undulation': geoid,
+            'svs_num': gga.satellites or 0,
+            'soln_svs_num': gga.satellites or 0,
+            'diff_age_s': _safe_float(gga.differential_age_s, math.nan),
             'sol_age_s': math.nan,
             'p_sol_status': p_sol_status,
             'pos_type': pos_type,
-            'utc_time_s': nmea.epoch_seconds(None, gga.utc_seconds),
+            'utc_time_s': utc_s,
             '_source': 'gga',
         }
 
@@ -121,17 +137,21 @@ class G90DriverNode(BaseSerialGnssNode):
         stamp = self.get_clock().now().to_msg()
 
         # 1. Determine Position Solution & Status
-        p_sol_status = int(d.get('p_sol_status', 1))
-        pos_type = int(d.get('pos_type', 0))
+        p_sol_status = int(d.get('p_sol_status') or 1)
+        pos_type = int(d.get('pos_type') or 0)
         if self.gga is not None and self.gga.fix_quality != 0:
             p_sol_status, pos_type = gga_solution(self.gga.fix_quality)
 
         solved = (p_sol_status == 0)
         status = NavSatStatus.STATUS_FIX if solved else NavSatStatus.STATUS_NO_FIX
 
-        lat_std = float(d.get('latitude_std', math.nan))
-        lon_std = float(d.get('longitude_std', math.nan))
-        alt_std = float(d.get('altitude_std', math.nan))
+        lat_std_raw = d.get('latitude_std')
+        lon_std_raw = d.get('longitude_std')
+        alt_std_raw = d.get('altitude_std')
+
+        lat_std = _safe_float(lat_std_raw, math.nan)
+        lon_std = _safe_float(lon_std_raw, math.nan)
+        alt_std = _safe_float(alt_std_raw, math.nan)
 
         std_devs = None
         if solved and math.isfinite(lon_std) and math.isfinite(lat_std) and math.isfinite(alt_std):
@@ -139,11 +159,15 @@ class G90DriverNode(BaseSerialGnssNode):
 
         # 2. Publish Standard NavSatFix via BaseGnssNode
         fix = None
-        if self.publish_navsat_fix:
+        lat_val = d.get('latitude')
+        lon_val = d.get('longitude')
+        alt_val = d.get('altitude')
+
+        if self.publish_navsat_fix and lat_val is not None and lon_val is not None and alt_val is not None:
             fix = self.publish_fix(
-                latitude=float(d['latitude']),
-                longitude=float(d['longitude']),
-                altitude=float(d['altitude']),
+                latitude=_safe_float(lat_val, 0.0),
+                longitude=_safe_float(lon_val, 0.0),
+                altitude=_safe_float(alt_val, 0.0),
                 status=status,
                 service=NavSatStatus.SERVICE_GPS,
                 std_devs=std_devs,
@@ -161,35 +185,38 @@ class G90DriverNode(BaseSerialGnssNode):
         rtk.header = header
         rtk.bestnav.header = header
 
-        utc_time = d.get('utc_time_s', math.nan)
-        if not math.isfinite(utc_time):
+        utc_time = d.get('utc_time_s')
+        if utc_time is None or not (isinstance(utc_time, (int, float)) and math.isfinite(utc_time)):
             utc_time = stamp.sec + stamp.nanosec * 1e-9
         rtk.bestnav.utc_time_s = float(utc_time)
 
         rtk.bestnav.p_sol_status = p_sol_status
         rtk.bestnav.pos_type = pos_type
-        rtk.bestnav.latitude_deg = float(d['latitude'])
-        rtk.bestnav.longitude_deg = float(d['longitude'])
-        rtk.bestnav.altitude_m = float(d['altitude'])
+        rtk.bestnav.latitude_deg = _safe_float(lat_val, 0.0)
+        rtk.bestnav.longitude_deg = _safe_float(lon_val, 0.0)
+        rtk.bestnav.altitude_m = _safe_float(alt_val, 0.0)
 
         rtk.bestnav.lat_std = lat_std if math.isfinite(lat_std) else 0.0
         rtk.bestnav.lon_std = lon_std if math.isfinite(lon_std) else 0.0
         rtk.bestnav.hgt_std = alt_std if math.isfinite(alt_std) else 0.0
 
-        undulation = float(d.get('undulation', 0.0))
-        svs_num = int(d.get('svs_num', 0))
-        soln_svs_num = int(d.get('soln_svs_num', 0))
-        diff_age = float(d.get('diff_age_s', math.nan))
-        sol_age = float(d.get('sol_age_s', math.nan))
+        undulation = _safe_float(d.get('undulation'), 0.0)
+        svs_num = int(d.get('svs_num') or 0)
+        soln_svs_num = int(d.get('soln_svs_num') or 0)
+        diff_age = _safe_float(d.get('diff_age_s'), 0.0)
+        sol_age = _safe_float(d.get('sol_age_s'), 0.0)
 
         if self.gga is not None:
-            if math.isfinite(self.gga.geoid_separation) and self.gga.geoid_separation != 0.0:
-                undulation = self.gga.geoid_separation
-            if self.gga.satellites > 0:
-                svs_num = max(svs_num, self.gga.satellites)
-                soln_svs_num = max(soln_svs_num, self.gga.satellites)
-            if math.isfinite(self.gga.differential_age_s):
-                diff_age = self.gga.differential_age_s
+            sep = getattr(self.gga, 'geoid_separation', None)
+            if sep is not None and isinstance(sep, (int, float)) and math.isfinite(sep) and sep != 0.0:
+                undulation = sep
+            sats = getattr(self.gga, 'satellites', 0) or 0
+            if sats > 0:
+                svs_num = max(svs_num, sats)
+                soln_svs_num = max(soln_svs_num, sats)
+            da = getattr(self.gga, 'differential_age_s', None)
+            if da is not None and isinstance(da, (int, float)) and math.isfinite(da):
+                diff_age = da
 
         rtk.bestnav.undulation = float(undulation)
         rtk.bestnav.svs_num = svs_num
@@ -198,19 +225,21 @@ class G90DriverNode(BaseSerialGnssNode):
         rtk.bestnav.sol_age_s = float(sol_age) if math.isfinite(sol_age) else 0.0
 
         if self.velocity:
-            speed = float(self.velocity['speed'])
-            course_deg = float(self.velocity.get('course_deg', math.degrees(self.velocity['course']) % 360.0))
-            vertical = float(self.velocity['vertical'])
-            ver_spd_std = float(self.velocity['vertical_std'])
-            hor_spd_std = float(self.velocity['horizontal_std'])
+            speed = _safe_float(self.velocity.get('speed'), 0.0)
+            course_rad = _safe_float(self.velocity.get('course'), 0.0)
+            course_deg_val = self.velocity.get('course_deg')
+            course_deg = _safe_float(course_deg_val, math.degrees(course_rad) % 360.0)
+            vertical = _safe_float(self.velocity.get('vertical'), 0.0)
+            ver_spd_std = _safe_float(self.velocity.get('vertical_std'), 0.0)
+            hor_spd_std = _safe_float(self.velocity.get('horizontal_std'), 0.0)
 
-            rtk.bestnav.hor_spd = speed
-            rtk.bestnav.trk_gnd = course_deg
-            rtk.bestnav.ver_spd = vertical
-            rtk.bestnav.ver_spd_std = ver_spd_std if math.isfinite(ver_spd_std) else 0.0
-            rtk.bestnav.hor_spd_std = hor_spd_std if math.isfinite(hor_spd_std) else 0.0
-            rtk.bestnav.v_sol_status = int(self.velocity.get('v_sol_status', 0))
-            rtk.bestnav.vel_type = int(self.velocity.get('vel_type', 16))
+            rtk.bestnav.hor_spd = float(speed)
+            rtk.bestnav.trk_gnd = float(course_deg)
+            rtk.bestnav.ver_spd = float(vertical)
+            rtk.bestnav.ver_spd_std = float(ver_spd_std)
+            rtk.bestnav.hor_spd_std = float(hor_spd_std)
+            rtk.bestnav.v_sol_status = int(self.velocity.get('v_sol_status') or 0)
+            rtk.bestnav.vel_type = int(self.velocity.get('vel_type') or 16)
         else:
             rtk.bestnav.hor_spd = 0.0
             rtk.bestnav.trk_gnd = 0.0
@@ -228,14 +257,19 @@ class G90DriverNode(BaseSerialGnssNode):
         heading_deg = 0.0
 
         if self.heading:
-            heading_deg = float(self.heading.heading_deg) % 360.0
-            pitch_deg = float(self.heading.pitch_deg)
-            roll_deg = float(self.heading.roll_deg)
+            h_raw = getattr(self.heading, 'heading_deg', None)
+            p_raw = getattr(self.heading, 'pitch_deg', None)
+            r_raw = getattr(self.heading, 'roll_deg', None)
+
+            heading_deg = _safe_float(h_raw, 0.0) % 360.0
+            pitch_deg = _safe_float(p_raw, 0.0)
+            roll_deg = _safe_float(r_raw, 0.0)
+
             rtk.heading.sol_status = 0
             rtk.heading.heading_type = pos_type if pos_type in (34, 50) else 0
             rtk.heading.base_line = math.nan
-            rtk.heading.heading_deg = heading_deg
-            rtk.heading.pitch_deg = pitch_deg
+            rtk.heading.heading_deg = heading_deg if (h_raw is not None and math.isfinite(h_raw)) else math.nan
+            rtk.heading.pitch_deg = pitch_deg if (p_raw is not None and math.isfinite(p_raw)) else math.nan
             rtk.heading.heading_std = math.nan
             rtk.heading.pitch_std = math.nan
             rtk.heading.svs_num = svs_num
@@ -268,7 +302,7 @@ class G90DriverNode(BaseSerialGnssNode):
         odom.pose.pose.orientation.y = qy
         odom.pose.pose.orientation.z = qz
         odom.pose.pose.orientation.w = qw
-        odom.pose.pose.position.z = float(d['altitude'])
+        odom.pose.pose.position.z = _safe_float(alt_val, 0.0)
 
         if solved and math.isfinite(lon_std) and math.isfinite(lat_std) and math.isfinite(alt_std):
             odom.pose.covariance[0] = lon_std ** 2
@@ -279,11 +313,13 @@ class G90DriverNode(BaseSerialGnssNode):
             odom.pose.covariance[35] = 0.05
 
         if self.velocity:
-            odom.twist.twist.linear.x = float(self.velocity.get('vel_east', 0.0))
-            odom.twist.twist.linear.y = float(self.velocity.get('vel_north', 0.0))
-            odom.twist.twist.linear.z = float(self.velocity.get('vertical', 0.0))
-            hor_var = float(self.velocity['horizontal_std']) ** 2 if math.isfinite(self.velocity['horizontal_std']) else 0.04
-            ver_var = float(self.velocity['vertical_std']) ** 2 if math.isfinite(self.velocity['vertical_std']) else 0.04
+            odom.twist.twist.linear.x = _safe_float(self.velocity.get('vel_east'), 0.0)
+            odom.twist.twist.linear.y = _safe_float(self.velocity.get('vel_north'), 0.0)
+            odom.twist.twist.linear.z = _safe_float(self.velocity.get('vertical'), 0.0)
+            h_std = _safe_float(self.velocity.get('horizontal_std'), math.nan)
+            v_std = _safe_float(self.velocity.get('vertical_std'), math.nan)
+            hor_var = h_std ** 2 if math.isfinite(h_std) else 0.04
+            ver_var = v_std ** 2 if math.isfinite(v_std) else 0.04
             odom.twist.covariance[0] = hor_var
             odom.twist.covariance[7] = hor_var
             odom.twist.covariance[14] = ver_var

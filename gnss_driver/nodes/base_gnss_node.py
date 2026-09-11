@@ -52,7 +52,16 @@ class BaseGnssNode(Node):
             std_devs: Optional tuple of (lon_std, lat_std, alt_std) in meters for ENU diagonal covariance
             stamp: Optional ROS Time stamp; if None, current clock is used.
         """
-        if not (math.isfinite(latitude) and math.isfinite(longitude) and math.isfinite(altitude)):
+        if latitude is None or longitude is None or altitude is None:
+            return None
+        try:
+            lat = float(latitude)
+            lon = float(longitude)
+            alt = float(altitude)
+        except (TypeError, ValueError):
+            return None
+
+        if not (math.isfinite(lat) and math.isfinite(lon) and math.isfinite(alt)):
             return None
 
         fix = NavSatFix()
@@ -61,16 +70,16 @@ class BaseGnssNode(Node):
 
         fix.status.status = status
         fix.status.service = service
-        fix.latitude = float(latitude)
-        fix.longitude = float(longitude)
-        fix.altitude = float(altitude)
+        fix.latitude = lat
+        fix.longitude = lon
+        fix.altitude = alt
 
         # Standard ROS ENU convention:
         # index 0: East (Lon variance), index 4: North (Lat variance), index 8: Up (Alt variance)
         if (
             std_devs is not None
             and status != NavSatStatus.STATUS_NO_FIX
-            and all(math.isfinite(s) and s >= 0.0 for s in std_devs)
+            and all(s is not None and math.isfinite(s) and s >= 0.0 for s in std_devs)
         ):
             lon_std, lat_std, alt_std = std_devs
             fix.position_covariance[0] = float(lon_std) ** 2
