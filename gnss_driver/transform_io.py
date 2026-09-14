@@ -56,8 +56,7 @@ class GpsOdomTransform:
             prefix='.gnss_transform_', suffix='.tmp', dir=directory, text=True)
         try:
             with os.fdopen(file_descriptor, 'w', encoding='utf-8') as stream:
-                # Keep the v1 format identifier so existing transform files remain readable.
-                stream.write('format=g60_gps_odom_transform_v1\n')
+                stream.write('format=gnss_gps_odom_transform_v1\n')
                 stream.write('locked={}\n'.format(str(self.locked).lower()))
                 stream.write('output_frame={}\n'.format(self.output_frame))
                 stream.write('gps_frame={}\n'.format(self.gps_frame))

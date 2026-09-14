@@ -4,8 +4,8 @@ ntrip_client:
     host: "103.143.19.54"
     port: 8002                                # 8001: ITRF2008 / 8002: WGS84 / 8003: CGCS2000
     mountpoint: "RTCM33GRCEJpro"               # RTCM33GRCEJpro (五星十六频) 或 RTCM32GRCpro (三星八频)
-    username: "6hhjc1021"
-    password: "37354"
+    username: "6hhjc1102"
+    password: "93383"
     ntrip_version: "Ntrip/2.0"
 
     # G90 RTK 差分注入串口（UART2，通过 CH340 接入，波特率固定 115200）

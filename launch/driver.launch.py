@@ -31,5 +31,5 @@ def generate_launch_description():
         # 可选：伴随启动 NTRIP 差分注入节点 (将 RTCM3 注入到 /dev/wheeltec_rtk)
         Node(package='gnss_driver', executable='ntrip_client', name='ntrip_client', output='screen',
              parameters=[ntrip_config],
-             condition=IfCondition(start_ntrip)),
+             condition=IfCondition(PythonExpression(["'", start_ntrip, "' == 'true' and '", device, "' == 'g90'"]))),
     ])

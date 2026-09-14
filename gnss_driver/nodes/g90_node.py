@@ -171,9 +171,15 @@ class G90DriverNode(BaseSerialGnssNode):
         stamp = self.get_clock().now().to_msg()
 
         # 1. Determine Position Solution & Status
-        p_sol_status = int(d.get('p_sol_status') or 1)
-        pos_type = int(d.get('pos_type') or 0)
-        if self.gga is not None and self.gga.fix_quality != 0:
+        try:
+            p_sol_status = int(d.get('p_sol_status', 1))
+            pos_type = int(d.get('pos_type', 0))
+        except (TypeError, ValueError):
+            p_sol_status, pos_type = 1, 0
+        # PVTSLNA is the authoritative solution source. GGA only fills in
+        # status/type when the proprietary sentence did not expose enums.
+        if (not d.get('_solution_known', False)
+                and self.gga is not None and self.gga.fix_quality != 0):
             p_sol_status, pos_type = gga_solution(self.gga.fix_quality)
 
         solved = (p_sol_status == 0)
@@ -258,22 +264,38 @@ class G90DriverNode(BaseSerialGnssNode):
         rtk.bestnav.diff_age_s = float(diff_age) if math.isfinite(diff_age) else 0.0
         rtk.bestnav.sol_age_s = float(sol_age) if math.isfinite(sol_age) else 0.0
 
-        if self.velocity:
-            speed = _safe_float(self.velocity.get('speed'), 0.0)
-            course_rad = _safe_float(self.velocity.get('course'), 0.0)
-            course_deg_val = self.velocity.get('course_deg')
+        velocity = self.velocity
+        # PVTSLNA carries a complete velocity solution as well.  Use it when
+        # BESTNAVA has not arrived (or is disabled in the receiver config).
+        if velocity is None and all(k in d for k in ('vel_north', 'vel_east')):
+            vn = _safe_float(d.get('vel_north'), 0.0)
+            ve = _safe_float(d.get('vel_east'), 0.0)
+            velocity = {
+                'speed': _safe_float(d.get('speed'), math.hypot(vn, ve)),
+                'course_deg': math.degrees(math.atan2(ve, vn)) % 360.0,
+                'course': math.atan2(ve, vn),
+                'vertical': 0.0,
+                'vertical_std': math.nan,
+                'horizontal_std': math.nan,
+                'v_sol_status': p_sol_status,
+                'vel_type': pos_type,
+            }
+        if velocity:
+            speed = _safe_float(velocity.get('speed'), 0.0)
+            course_rad = _safe_float(velocity.get('course'), 0.0)
+            course_deg_val = velocity.get('course_deg')
             course_deg = _safe_float(course_deg_val, math.degrees(course_rad) % 360.0)
-            vertical = _safe_float(self.velocity.get('vertical'), 0.0)
-            ver_spd_std = _safe_float(self.velocity.get('vertical_std'), 0.0)
-            hor_spd_std = _safe_float(self.velocity.get('horizontal_std'), 0.0)
+            vertical = _safe_float(velocity.get('vertical'), 0.0)
+            ver_spd_std = _safe_float(velocity.get('vertical_std'), 0.0)
+            hor_spd_std = _safe_float(velocity.get('horizontal_std'), 0.0)
 
             rtk.bestnav.hor_spd = float(speed)
             rtk.bestnav.trk_gnd = float(course_deg)
             rtk.bestnav.ver_spd = float(vertical)
             rtk.bestnav.ver_spd_std = float(ver_spd_std)
             rtk.bestnav.hor_spd_std = float(hor_spd_std)
-            rtk.bestnav.v_sol_status = int(self.velocity.get('v_sol_status') or 0)
-            rtk.bestnav.vel_type = int(self.velocity.get('vel_type') or 16)
+            rtk.bestnav.v_sol_status = int(velocity.get('v_sol_status') or 0)
+            rtk.bestnav.vel_type = int(velocity.get('vel_type') or 16)
         else:
             rtk.bestnav.hor_spd = 0.0
             rtk.bestnav.trk_gnd = 0.0
@@ -290,24 +312,33 @@ class G90DriverNode(BaseSerialGnssNode):
         pitch_deg = 0.0
         heading_deg = 0.0
 
-        if self.heading:
-            h_raw = getattr(self.heading, 'heading_deg', None)
-            p_raw = getattr(self.heading, 'pitch_deg', None)
-            r_raw = getattr(self.heading, 'roll_deg', None)
+        heading = self.heading
+        # PVTSLNA/UNIHEADING may provide heading even if GNHPR is not enabled.
+        if heading is None and math.isfinite(_safe_float(d.get('heading_deg'), math.nan)):
+            h = _safe_float(d.get('heading_deg'), 0.0)
+            p = _safe_float(d.get('pitch_deg'), 0.0)
+            from ..adapters.g90_unicore import Gnhpr
+            heading = Gnhpr((math.radians(h), math.radians(p), 0.0, h, p, 0.0))
+
+        if heading:
+            h_raw = getattr(heading, 'heading_deg', None)
+            p_raw = getattr(heading, 'pitch_deg', None)
+            r_raw = getattr(heading, 'roll_deg', None)
 
             heading_deg = _safe_float(h_raw, 0.0) % 360.0
             pitch_deg = _safe_float(p_raw, 0.0)
             roll_deg = _safe_float(r_raw, 0.0)
 
-            rtk.heading.sol_status = 0
-            rtk.heading.heading_type = pos_type if pos_type in (34, 50) else 0
-            rtk.heading.base_line = math.nan
+            heading_type = int(d.get('heading_type', 0) or 0)
+            rtk.heading.sol_status = 0 if heading_type in (34, 50) or self.heading else 1
+            rtk.heading.heading_type = heading_type if heading_type else (pos_type if pos_type in (34, 50) else 0)
+            rtk.heading.base_line = _safe_float(d.get('heading_length'), math.nan)
             rtk.heading.heading_deg = heading_deg if (h_raw is not None and math.isfinite(h_raw)) else math.nan
             rtk.heading.pitch_deg = pitch_deg if (p_raw is not None and math.isfinite(p_raw)) else math.nan
-            rtk.heading.heading_std = math.nan
-            rtk.heading.pitch_std = math.nan
-            rtk.heading.svs_num = svs_num
-            rtk.heading.soln_svs_num = soln_svs_num
+            rtk.heading.heading_std = _safe_float(d.get('heading_std'), math.nan)
+            rtk.heading.pitch_std = _safe_float(d.get('pitch_std'), math.nan)
+            rtk.heading.svs_num = int(d.get('heading_svs_num') or svs_num)
+            rtk.heading.soln_svs_num = int(d.get('heading_soln_svs_num') or soln_svs_num)
         else:
             rtk.heading.sol_status = 1
             rtk.heading.heading_type = 0
@@ -334,10 +365,13 @@ class G90DriverNode(BaseSerialGnssNode):
         odom.header = header
         odom.child_frame_id = 'base_link'
 
+        # GNHPR heading is geographic (0 deg north, clockwise). Convert to
+        # ROS REP-103 ENU yaw (0 deg east, counter-clockwise) for Odometry.
+        yaw_enu = math.pi * 0.5 - math.radians(heading_deg)
         qx, qy, qz, qw = euler_to_quaternion(
             math.radians(roll_deg),
             math.radians(pitch_deg),
-            math.radians(heading_deg),
+            yaw_enu,
         )
 
         odom.pose.pose.orientation.x = qx

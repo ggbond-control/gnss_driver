@@ -146,7 +146,7 @@ class BaseGnssNode(Node):
         imu.orientation.x = sr * cp * cy - cr * sp * sy
         imu.orientation.y = cr * sp * cy + sr * cp * sy
         imu.orientation.z = cr * cp * sy - sr * sp * cy
-        imu.orientation.w = cr * cp * cy + sr * cp * sy
+        imu.orientation.w = cr * cp * cy + sr * sp * sy
 
         # Orientation covariance (index 8 is Yaw)
         std_rad = math.radians(heading_std_deg) if (heading_std_deg is not None and math.isfinite(heading_std_deg)) else math.radians(0.2)

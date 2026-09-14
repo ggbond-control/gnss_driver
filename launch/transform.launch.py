@@ -37,7 +37,12 @@ def generate_launch_description():
             executable='gnss_trajectory',
             name='gnss_trajectory',
             output='screen',
-            parameters=[PathJoinSubstitution([pkg_share, 'config', 'trajectory.yaml'])],
+            parameters=[
+                PathJoinSubstitution([pkg_share, 'config', 'trajectory.yaml']),
+                {'fix_topic': '/fix_from_odom',
+                 'output_filename': 'fix_from_odom_trajectory.ovjsn',
+                 'polyline_name': 'fix_from_odom'},
+            ],
             condition=IfCondition(export_polyline)
         ),
     ])

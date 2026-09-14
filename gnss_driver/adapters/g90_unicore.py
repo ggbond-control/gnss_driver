@@ -77,48 +77,80 @@ def parse_pvtslna(sentence):
         return None
     fields = sentence[1:sentence.find('*')].split(',')
     try:
-        # UM982 PVTSLNA layout used by Wheeltec / Unicore firmware.
-        # parts[10]: height (m), parts[11]: lat (deg), parts[12]: lon (deg),
-        # parts[13]: hgt_std (m), parts[14]: lat_std (m), parts[15]: lon_std (m).
+        # The documented format has a semicolon between the common header and
+        # the payload.  Payload starts with bestpos_type, followed by hgt/lat/
+        # lon and their standard deviations.  Older Wheeltec firmware emitted
+        # an extra numeric field before hgt; retain compatibility with it.
+        payload = []
+        for i, field in enumerate(fields):
+            if ';' in field:
+                head, tail = field.split(';', 1)
+                fields[i] = head
+                payload = [tail] + fields[i + 1:]
+                break
+        if not payload:
+            payload = fields[9:]
+        payload = [item for part in payload for item in part.split(';')]
+        legacy = payload and _is_number(payload[0])
+        # In both documented and legacy variants the first payload token is
+        # a solution/auxiliary field; position starts at token 1.
+        base = 1
+        if len(payload) < base + 6:
+            return None
         result = dict(
-            altitude=float(fields[10]),
-            latitude=float(fields[11]),
-            longitude=float(fields[12]),
-            altitude_std=float(fields[13]),
-            latitude_std=float(fields[14]),
-            longitude_std=float(fields[15]),
+            altitude=float(payload[base]),
+            latitude=float(payload[base + 1]),
+            longitude=float(payload[base + 2]),
+            altitude_std=float(payload[base + 3]),
+            latitude_std=float(payload[base + 4]),
+            longitude_std=float(payload[base + 5]),
         )
-        # Optional metadata fields: undulation, satellites, diff age, sol age.
-        try:
-            result['undulation'] = float(fields[9]) if len(fields) > 9 and fields[9].strip() else 0.0
-        except ValueError:
-            result['undulation'] = 0.0
+        def number(index, default=math.nan):
+            try:
+                return float(payload[index]) if payload[index].strip() else default
+            except (IndexError, ValueError):
+                return default
+        def integer(index, default=0):
+            value = number(index, math.nan)
+            return int(value) if math.isfinite(value) else default
 
-        try:
-            result['svs_num'] = int(fields[16]) if len(fields) > 16 and fields[16].strip().isdigit() else 0
-        except (ValueError, IndexError):
-            result['svs_num'] = 0
-
-        try:
-            result['soln_svs_num'] = int(fields[17]) if len(fields) > 17 and fields[17].strip().isdigit() else 0
-        except (ValueError, IndexError):
-            result['soln_svs_num'] = 0
-
-        try:
-            result['diff_age_s'] = float(fields[18]) if len(fields) > 18 and fields[18].strip() else math.nan
-        except (ValueError, IndexError):
-            result['diff_age_s'] = math.nan
-
-        try:
-            result['sol_age_s'] = float(fields[19]) if len(fields) > 19 and fields[19].strip() else math.nan
-        except (ValueError, IndexError):
-            result['sol_age_s'] = math.nan
+        # Documented PVTSLN metadata (indices relative to payload).
+        result['undulation'] = number(base + 11, 0.0)
+        result['svs_num'] = integer(base + 12)
+        result['soln_svs_num'] = integer(base + 13)
+        result['diff_age_s'] = number(base + 6)
+        result['sol_age_s'] = math.nan  # PVTSLNA does not contain BESTNAV sol_age
+        result['vel_north'] = number(base + 16)
+        result['vel_east'] = number(base + 17)
+        result['speed'] = number(base + 18)
+        result['heading_type'] = integer(base + 19)
+        result['heading_length'] = number(base + 20)
+        result['heading_deg'] = number(base + 21)
+        result['pitch_deg'] = number(base + 22)
+        result['heading_svs_num'] = integer(base + 23)
+        result['heading_soln_svs_num'] = integer(base + 24)
+        if legacy:
+            # Legacy Wheeltec PVTSLN payload: undulation, SV counts and ages
+            # followed immediately after the six position fields.
+            result['undulation'] = number(0, 0.0)
+            result['svs_num'] = integer(7)
+            result['soln_svs_num'] = integer(8)
+            result['diff_age_s'] = number(9)
+            result['sol_age_s'] = number(10)
 
         result['utc_time_s'] = _header_gps_time_to_utc(fields)
         result['p_sol_status'], result['pos_type'] = _solution_fields(fields)
+        result['_solution_known'] = _solution_known(fields)
         return result
     except (IndexError, ValueError):
         return None
+
+def _is_number(value):
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False
 
 def _solution_fields(fields):
     """Map documented Unicore solution tokens to UniRtkPvh values.
@@ -155,6 +187,18 @@ def _solution_fields(fields):
             if upper in type_tokens:
                 pos_type = type_tokens[upper]
     return status, pos_type
+
+
+def _solution_known(fields):
+    """Whether the extended sentence contained documented solution enums."""
+    status_tokens = {'SOL_COMPUTED', 'INSUFFICIENT_OBS', 'NO_CONVERGENCE', 'COV_TRACE'}
+    type_tokens = {'NONE', 'SINGLE', 'PSRDIFF', 'NARROW_FLOAT', 'NARROW_INT'}
+    tokens = {
+        token.strip().upper()
+        for field in fields
+        for token in field.replace(';', ',').split(',')
+    }
+    return bool(tokens & (status_tokens | type_tokens))
 
 
 def gga_solution(fix_quality):

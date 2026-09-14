@@ -26,7 +26,6 @@ class G60DriverNode(BaseSerialGnssNode):
         super().__init__(node_name='gnss_device', default_baud=9600, default_is_rtk=False)
 
     def setup_subclass(self) -> None:
-        self.use_rmc_fix = self.declare_parameter('use_rmc_fix', False).value
         self.time_ref_source = self.declare_parameter('time_ref_source', 'gps').value
         self.publish_raw_nmea = self.declare_parameter('publish_raw_nmea', False).value
         self.raw_nmea_topic = self.declare_parameter('raw_nmea_topic', 'nmea_sentence').value
@@ -69,21 +68,10 @@ class G60DriverNode(BaseSerialGnssNode):
 
         stamp = self.get_clock().now().to_msg()
 
-        if isinstance(data, nmea.Gga) and not self.use_rmc_fix:
+        if isinstance(data, nmea.Gga):
             self._handle_gga(data, stamp)
         elif isinstance(data, nmea.Rmc):
             self.utc_date = data.utc_date or self.utc_date
-            if self.use_rmc_fix:
-                status = NavSatStatus.STATUS_FIX if data.valid else NavSatStatus.STATUS_NO_FIX
-                self.valid_fix = data.valid
-                self.publish_fix(
-                    latitude=data.latitude,
-                    longitude=data.longitude,
-                    altitude=math.nan,
-                    status=status,
-                    std_devs=None,
-                    stamp=stamp,
-                )
             if data.valid:
                 self._publish_velocity(data.speed_mps, data.course_rad, stamp)
             self._publish_time(stamp, data.utc_seconds)

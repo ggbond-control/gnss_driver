@@ -15,7 +15,5 @@ gnss_device:
 
     # NMEA 专有参数
     time_ref_source: gnss
-    use_rmc_fix: false
     publish_raw_nmea: false
     raw_nmea_topic: /nmea_sentence
-
