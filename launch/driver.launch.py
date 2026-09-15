@@ -11,11 +11,16 @@ def generate_launch_description():
     device = LaunchConfiguration('device')
     start_ntrip = LaunchConfiguration('ntrip')
     ntrip_config = LaunchConfiguration('ntrip_config')
+    export_polyline = LaunchConfiguration('export_polyline')
 
     return LaunchDescription([
         DeclareLaunchArgument('device', default_value='g60', description='设备配置：g60、g90 或 d1m'),
         DeclareLaunchArgument('ntrip', default_value='false', description='是否随同启动 NTRIP 差分客户端 (用于 G90 RTK)'),
         DeclareLaunchArgument('ntrip_config', default_value=os.path.join(share, 'config', 'ntrip.yaml'), description='NTRIP 配置文件路径'),
+        DeclareLaunchArgument(
+            'export_polyline', default_value='false',
+            description='是否启动轨迹记录节点，将 /fix 写入 data/gnss_trajectory.ovjsn',
+        ),
 
         # 设备驱动节点
         Node(package='gnss_driver', executable='g60_driver', name='gnss_device', output='screen',
@@ -32,4 +37,13 @@ def generate_launch_description():
         Node(package='gnss_driver', executable='ntrip_client', name='ntrip_client', output='screen',
              parameters=[ntrip_config],
              condition=IfCondition(PythonExpression(["'", start_ntrip, "' == 'true' and '", device, "' == 'g90'"]))),
+
+        # 可选：记录标准 /fix 轨迹。默认关闭，避免普通驱动启动时产生文件写入。
+        Node(
+            package='gnss_driver', executable='gnss_trajectory', name='gnss_trajectory', output='screen',
+            parameters=[
+                os.path.join(share, 'config', 'trajectory.yaml'),
+            ],
+            condition=IfCondition(export_polyline),
+        ),
     ])

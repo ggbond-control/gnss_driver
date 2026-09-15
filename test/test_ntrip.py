@@ -106,6 +106,8 @@ def test_ntrip_config_file_validity():
     assert params['host'] == '103.143.19.54'
     assert params['port'] == 8002
     assert params['mountpoint'] == 'RTCM33GRCEJpro'
-    assert params['username'] == '6hhjc1021'
+    # Credentials must never be committed to the repository.
+    assert params['username'] == ''
+    assert params['password'] == ''
     assert params['rtk_port'] == '/dev/wheeltec_rtk'
     assert params['rtk_baud'] == 115200

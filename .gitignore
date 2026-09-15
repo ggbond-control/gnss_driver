@@ -4,4 +4,6 @@ build/
 install/
 log/
 data/*
+ntrip.local.yaml
+config/ntrip.local.yaml
 .vscode/

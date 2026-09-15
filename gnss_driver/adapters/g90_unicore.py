@@ -47,29 +47,30 @@ def euler_to_quaternion(roll_rad: float, pitch_rad: float, yaw_rad: float):
 
 
 class Gnhpr(tuple):
-    @property
-    def heading_rad(self) -> float:
-        return self[0]
+    """GNHPR attitude; supports legacy six-value construction."""
+    __slots__ = ()
 
-    @property
-    def pitch_rad(self) -> float:
-        return self[1]
+    def __new__(cls, *values):
+        if len(values) == 1 and not isinstance(values[0], (int, float)):
+            values = tuple(values[0])
+        else:
+            values = tuple(values)
+        if len(values) < 6:
+            raise ValueError('Gnhpr requires at least six values')
+        values += (1, 0, math.nan, 0, math.nan)[:max(0, 11 - len(values))]
+        return tuple.__new__(cls, values)
 
-    @property
-    def roll_rad(self) -> float:
-        return self[2]
-
-    @property
-    def heading_deg(self) -> float:
-        return self[3]
-
-    @property
-    def pitch_deg(self) -> float:
-        return self[4]
-
-    @property
-    def roll_deg(self) -> float:
-        return self[5]
+    heading_rad = property(lambda self: self[0])
+    pitch_rad = property(lambda self: self[1])
+    roll_rad = property(lambda self: self[2])
+    heading_deg = property(lambda self: self[3])
+    pitch_deg = property(lambda self: self[4])
+    roll_deg = property(lambda self: self[5])
+    sol_status = property(lambda self: self[6])
+    heading_type = property(lambda self: self[7])
+    baseline = property(lambda self: self[8])
+    svs_num = property(lambda self: self[9])
+    diff_age_s = property(lambda self: self[10])
 
 
 def parse_pvtslna(sentence):
@@ -139,7 +140,14 @@ def parse_pvtslna(sentence):
             result['sol_age_s'] = number(10)
 
         result['utc_time_s'] = _header_gps_time_to_utc(fields)
-        result['p_sol_status'], result['pos_type'] = _solution_fields(fields)
+        if legacy:
+            result['p_sol_status'], result['pos_type'] = _solution_fields(fields[:9])
+        else:
+            # Documented PVTSLN has bestpos_type as its first payload field,
+            # but no separate position status field. A non-NONE type means a
+            # computed position; do not let the later heading_type overwrite it.
+            _, result['pos_type'] = _solution_token_pair('SOL_COMPUTED', payload[0])
+            result['p_sol_status'] = 0 if result['pos_type'] != 0 else 1
         result['_solution_known'] = _solution_known(fields)
         return result
     except (IndexError, ValueError):
@@ -188,6 +196,18 @@ def _solution_fields(fields):
                 pos_type = type_tokens[upper]
     return status, pos_type
 
+def _solution_token_pair(status_token, type_token):
+    status_map = {
+        'SOL_COMPUTED': 0, 'INSUFFICIENT_OBS': 1,
+        'NO_CONVERGENCE': 2, 'COV_TRACE': 4,
+    }
+    type_map = {
+        'NONE': 0, 'SINGLE': 16, 'PSRDIFF': 17,
+        'NARROW_FLOAT': 34, 'NARROW_INT': 50,
+    }
+    return status_map.get(str(status_token).strip().upper(), 1), type_map.get(
+        str(type_token).strip().upper(), 0)
+
 
 def _solution_known(fields):
     """Whether the extended sentence contained documented solution enums."""
@@ -216,18 +236,26 @@ def gga_solution(fix_quality):
 def _header_gps_time_to_utc(fields):
     """Return Unix UTC seconds from a documented UM982 extended-NMEA header.
 
-    Header columns 4--6 must contain FINESTEERING (or another time status),
-    GPS week and GPS seconds-of-week.  Other sentence variants deliberately
-    return NaN rather than treating an arbitrary numeric field as UTC.
+    UM982 uses GPS week plus *milliseconds* of week in the extended header.
+    Some older Wheeltec layouts include an extra COM/port field, therefore
+    both ``fields[4:6]`` and ``fields[5:7]`` are accepted.
     """
     try:
-        if len(fields) < 7 or not fields[4].strip():
-            return math.nan
-        gps_week = int(fields[5])
-        seconds_of_week = float(fields[6])
-        if gps_week < 0 or not 0.0 <= seconds_of_week < 604800.0:
-            return math.nan
-        return _GPS_EPOCH_UNIX_S + gps_week * 604800.0 + seconds_of_week - _GPS_UTC_LEAP_SECONDS
+        candidates = ((4, 5, 6), (5, 6, None))
+        for week_i, tow_i, _ in candidates:
+            try:
+                if len(fields) <= tow_i:
+                    continue
+                gps_week = int(fields[week_i])
+                tow = float(fields[tow_i])
+            except (TypeError, ValueError, IndexError):
+                continue
+            # The documented value is milliseconds; retain compatibility with
+            # old test/firmware strings that used seconds.
+            seconds_of_week = tow / 1000.0 if tow >= 604800.0 else tow
+            if gps_week >= 0 and 0.0 <= seconds_of_week < 604800.0:
+                return _GPS_EPOCH_UNIX_S + gps_week * 604800.0 + seconds_of_week - _GPS_UTC_LEAP_SECONDS
+        return math.nan
     except (TypeError, ValueError):
         return math.nan
 
@@ -254,7 +282,7 @@ def parse_bestnava(sentence):
         vel_north = speed * math.cos(course_rad)
         vel_east = speed * math.sin(course_rad)
         v_sol_status, vel_type = _solution_fields(fields)
-        return dict(
+        result = dict(
             speed=speed,
             course=course_rad,
             course_deg=course_deg,
@@ -267,6 +295,59 @@ def parse_bestnava(sentence):
             vel_type=vel_type,
             utc_time_s=_header_gps_time_to_utc(fields),
         )
+        # BESTNAVA's documented payload also contains the best position and
+        # its covariance before the velocity fields:
+        # status,type,lat,lon,hgt,undulation,datum,lat_sigma,lon_sigma,
+        # hgt_sigma,station,diff_age,sol_age,svs,soln_svs,...
+        payload = []
+        for i, field in enumerate(fields):
+            if ';' in field:
+                head, tail = field.split(';', 1)
+                payload = [tail] + fields[i + 1:]
+                break
+        if not payload:
+            payload = fields[9:]
+        payload = [item for part in payload for item in part.split(';')]
+        if len(payload) >= 9:
+            v_sol_status, vel_type = _solution_token_pair(payload[-9], payload[-8])
+            result['v_sol_status'] = v_sol_status
+            result['vel_type'] = vel_type
+        if len(payload) >= 10:
+            def pfloat(index, default=math.nan):
+                try:
+                    return float(payload[index]) if payload[index].strip() else default
+                except (IndexError, ValueError):
+                    return default
+            def pint(index, default=0):
+                value = pfloat(index, math.nan)
+                return int(value) if math.isfinite(value) else default
+            explicit_status, explicit_type = _solution_token_pair(payload[0], payload[1])
+            result.update({
+                'latitude': pfloat(2),
+                'longitude': pfloat(3),
+                'altitude': pfloat(4),
+                'undulation': pfloat(5, 0.0),
+                'latitude_std': pfloat(7),
+                'longitude_std': pfloat(8),
+                'altitude_std': pfloat(9),
+                'diff_age_s': pfloat(11),
+                'sol_age_s': pfloat(12),
+                'svs_num': pint(13),
+                'soln_svs_num': pint(14),
+                'p_sol_status': explicit_status,
+                'pos_type': explicit_type,
+                '_source': 'bestnav',
+            })
+            # A solved status with implausible covariance is not a usable
+            # position.  Preserve the measurements but mark the solution
+            # invalid so downstream consumers do not treat it as RTK fixed.
+            stds = (result['latitude_std'], result['longitude_std'], result['altitude_std'])
+            if result['p_sol_status'] == 0 and (
+                    not all(math.isfinite(v) and v >= 0.0 for v in stds)
+                    or max(stds) > 100.0):
+                result['p_sol_status'] = 4
+                result['pos_type'] = 0
+        return result
     except (IndexError, ValueError):
         return None
 
@@ -288,13 +369,24 @@ def parse_gnhpr(sentence):
         heading_rad = math.radians(heading_deg)
         pitch_rad = math.radians(pitch_deg)
         roll_rad = math.radians(roll_deg)
-        return Gnhpr((
+        qf = int(float(fields[5])) if len(fields) > 5 and fields[5].strip() else 0
+        sol_status, heading_type = gga_solution(qf)
+        svs_num = int(float(fields[6])) if len(fields) > 6 and fields[6].strip() else 0
+        diff_age_s = float(fields[7]) if len(fields) > 7 and fields[7].strip() else math.nan
+        return Gnhpr(
+            (
             heading_rad,
             pitch_rad,
             roll_rad,
             heading_deg,
             pitch_deg,
             roll_deg,
-        ))
+            sol_status,
+            heading_type,
+            math.nan,
+            svs_num,
+            diff_age_s,
+            )
+        )
     except (IndexError, ValueError):
         return None

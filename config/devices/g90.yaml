@@ -16,10 +16,9 @@ gnss_device:
 
     # 坐标系与发布话题
     frame_id: gps
-    fix_topic: /fix
-    rtk_topic: /rtk_pvh
+    fix_topic: /fix_g90
+    rtk_topic: /rtk_pvh_g90
     odom_topic: /odometry_from_g90
     publish_navsat_fix: true
     publish_heading_gnss: true
     heading_gnss_topic: /heading_gnss
-

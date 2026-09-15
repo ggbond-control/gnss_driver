@@ -37,8 +37,10 @@ class NtripClientNode(Node):
         self.host = self.declare_parameter('host', '103.143.19.54').value
         self.port = int(self.declare_parameter('port', 8002).value)
         self.mountpoint = self.declare_parameter('mountpoint', 'RTCM33GRCEJpro').value
-        self.username = self.declare_parameter('username', '6hhjc1021').value
-        self.password = self.declare_parameter('password', '37354').value
+        username_param = self.declare_parameter('username', '').value
+        password_param = self.declare_parameter('password', '').value
+        self.username = username_param or os.environ.get('GNSS_NTRIP_USERNAME', '')
+        self.password = password_param or os.environ.get('GNSS_NTRIP_PASSWORD', '')
         self.ntrip_version = self.declare_parameter('ntrip_version', 'Ntrip/2.0').value
 
         self.rtk_port = self.declare_parameter('rtk_port', '/dev/wheeltec_rtk').value
@@ -77,7 +79,8 @@ class NtripClientNode(Node):
 
         self.get_logger().info(
             f'NTRIP Client initialized: CORS {self.host}:{self.port}/{self.mountpoint} '
-            f'(User: {self.username}), RTK Serial: {self.rtk_port} @ {self.rtk_baud}'
+            f'(credentials: {"configured" if self.username and self.password else "missing"}), '
+            f'RTK Serial: {self.rtk_port} @ {self.rtk_baud}'
         )
 
         # Start worker thread
