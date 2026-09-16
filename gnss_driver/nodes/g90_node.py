@@ -46,6 +46,8 @@ class G90DriverNode(BaseSerialGnssNode):
         self.velocity = None
         self.heading = None
         self.gga = None
+        self._bestnav_last_ns = 0
+        self._last_published_utc = None
 
         self.odom_topic = self.declare_parameter('odom_topic', '/odometry_from_g90').value
         self.publish_navsat_fix = self.declare_parameter('publish_navsat_fix', True).value
@@ -61,12 +63,18 @@ class G90DriverNode(BaseSerialGnssNode):
         if line.startswith('#PVTSLNA'):
             parsed = parse_pvtslna(line)
             if parsed:
+                # BESTNAVA is authoritative whenever it is arriving.  Keep
+                # PVTSLNA as a fallback only when BESTNAVA has been absent.
+                now_ns = self.get_clock().now().nanoseconds
+                if now_ns - self._bestnav_last_ns < 2_000_000_000:
+                    return
                 self.latest = parsed
                 self._publish()
         elif line.startswith('#BESTNAVA'):
             self.velocity = parse_bestnava(line)
             if self.velocity and 'latitude' in self.velocity:
                 self.latest_bestnav = self.velocity
+                self._bestnav_last_ns = self.get_clock().now().nanoseconds
                 self.latest = self.velocity
                 self._publish()
         elif line.startswith('$GNHPR'):
@@ -78,7 +86,7 @@ class G90DriverNode(BaseSerialGnssNode):
                 parsed = None
             if isinstance(parsed, nmea.Gga):
                 self.gga = parsed
-                if self.latest is None or self.latest.get('_source') == 'gga':
+                if (self.latest is None or self.latest.get('_source') == 'gga') and self._bestnav_last_ns == 0:
                     self.latest = self._gga_to_position(parsed)
                     self._publish()
         elif line.startswith(('$GNVTG', '$GPVTG')):
@@ -145,6 +153,13 @@ class G90DriverNode(BaseSerialGnssNode):
             return
 
         d = self.latest
+        receiver_utc = d.get('utc_time_s')
+        if isinstance(receiver_utc, (int, float)) and math.isfinite(receiver_utc):
+            # PVTSLNA/BESTNAVA can describe the same receiver epoch.  Publish
+            # that epoch once while retaining invalid status fields.
+            if self._last_published_utc is not None and abs(receiver_utc - self._last_published_utc) < 1e-6:
+                return
+            self._last_published_utc = float(receiver_utc)
         stamp = self.get_clock().now().to_msg()
 
         # 1. Determine Position Solution & Status
