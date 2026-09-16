@@ -132,6 +132,9 @@ ros2 run gnss_driver gnss_g90_configure \
 `CONFIG` 查询。终端显示“配置成功”且回显目标波特率才算验证通过。完成后把
 `config/devices/g90.yaml` 的 `baud` 改为新值（例如 `460800`）。
 
+脚本只配置 `--output-port` 指定的一个接收机端口，并先执行该端口的 `UNLOG`，
+不会同时发送无端口前缀和 `COM1` 两套订阅，因此不会主动制造重复报文。
+
 ### 2. GPS/里程计对齐
 
 支持通过 `device` 参数（`g60`、`g90`、`d1m`）自动加载对应的参数文件（`config/<device>_alignment.yaml`）：

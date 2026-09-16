@@ -35,10 +35,15 @@ def main(argv=None):
         p.error("python3-serial is required")
 
     period = f"{1.0 / max(1.0, min(20.0, args.rate)):.2f}".rstrip("0").rstrip(".")
-    commands = ["UNLOGGSV", "UNLOGGSA", "UNLOGRMC"]
-    for prefix in ("", f"{args.output_port} "):
-        commands += [f"PVTSLNA {prefix}{period}", f"GNHPR {prefix}{period}",
-                     f"BESTNAVA {prefix}{period}", f"GNGGA {prefix}{period}"]
+    # Configure exactly one receiver output port.  An unqualified command and
+    # an explicit COM1 command can refer to the same physical UART on some
+    # UM982 integrations and create duplicate output/serial backlog.
+    prefix = f"{args.output_port} "
+    # Clear all previously saved output on this port first.  This also removes
+    # any duplicate/unqualified subscriptions left by older driver versions.
+    commands = [f"UNLOG {args.output_port}"]
+    commands += [f"PVTSLNA {prefix}{period}", f"GNHPR {prefix}{period}",
+                 f"BESTNAVA {prefix}{period}", f"GNGGA {prefix}{period}"]
     commands.append(f"CONFIG {args.output_port} {args.baud}")
 
     print(f"连接 {args.port} @ {args.current_baud}，发送 G90 配置…")
