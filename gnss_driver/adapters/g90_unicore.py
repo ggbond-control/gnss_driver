@@ -57,7 +57,7 @@ class Gnhpr(tuple):
             values = tuple(values)
         if len(values) < 6:
             raise ValueError('Gnhpr requires at least six values')
-        values += (1, 0, math.nan, 0, math.nan)[:max(0, 11 - len(values))]
+        values += (1, 0, math.nan, 0, math.nan, math.nan, math.nan, 0)[:max(0, 14 - len(values))]
         return tuple.__new__(cls, values)
 
     heading_rad = property(lambda self: self[0])
@@ -71,6 +71,9 @@ class Gnhpr(tuple):
     baseline = property(lambda self: self[8])
     svs_num = property(lambda self: self[9])
     diff_age_s = property(lambda self: self[10])
+    heading_std = property(lambda self: self[11] if len(self) > 11 else math.nan)
+    pitch_std = property(lambda self: self[12] if len(self) > 12 else math.nan)
+    soln_svs_num = property(lambda self: self[13] if len(self) > 13 else 0)
 
 
 def parse_pvtslna(sentence):
@@ -390,3 +393,69 @@ def parse_gnhpr(sentence):
         )
     except (IndexError, ValueError):
         return None
+
+
+def parse_uniheadinga(sentence):
+    """Parse Unicore UNIHEADINGA / NovAtel HEADINGA dual-antenna attitude message.
+
+    Field order per Unicore UM982 / NovAtel specification:
+    sol_stat, pos_type, length, heading, pitch, reserved,
+    hdg_std_dev, ptch_std_dev, stn_id, #sv, #soln_sv, ...
+    """
+    if not _crc32(sentence):
+        return None
+    fields = sentence[1:sentence.find('*')].split(',')
+    payload = []
+    for i, field in enumerate(fields):
+        if ';' in field:
+            head, tail = field.split(';', 1)
+            payload = [tail] + fields[i + 1:]
+            break
+    if not payload:
+        payload = fields[9:]
+    payload = [item for part in payload for item in part.split(';')]
+    if len(payload) < 5:
+        return None
+    try:
+        def pfloat(index, default=math.nan):
+            try:
+                return float(payload[index]) if payload[index].strip() else default
+            except (IndexError, ValueError):
+                return default
+
+        def pint(index, default=0):
+            v = pfloat(index, math.nan)
+            return int(v) if math.isfinite(v) else default
+
+        sol_status, heading_type = _solution_token_pair(payload[0], payload[1])
+        baseline_length = pfloat(2)
+        heading_deg = pfloat(3)
+        pitch_deg = pfloat(4)
+        roll_deg = 0.0
+        heading_std = pfloat(6)
+        pitch_std = pfloat(7)
+        svs_num = pint(9)
+        soln_svs_num = pint(10)
+
+        heading_rad = math.radians(heading_deg) if math.isfinite(heading_deg) else math.nan
+        pitch_rad = math.radians(pitch_deg) if math.isfinite(pitch_deg) else math.nan
+
+        return Gnhpr((
+            heading_rad,
+            pitch_rad,
+            roll_deg,
+            heading_deg,
+            pitch_deg,
+            roll_deg,
+            sol_status,
+            heading_type,
+            baseline_length,
+            svs_num,
+            math.nan,
+            heading_std,
+            pitch_std,
+            soln_svs_num,
+        ))
+    except (IndexError, ValueError):
+        return None
+

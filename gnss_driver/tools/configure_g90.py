@@ -42,8 +42,9 @@ def main(argv=None):
     # Clear all previously saved output on this port first.  This also removes
     # any duplicate/unqualified subscriptions left by older driver versions.
     commands = [f"UNLOG {args.output_port}"]
-    commands += [f"PVTSLNA {prefix}{period}", f"GNHPR {prefix}{period}",
-                 f"BESTNAVA {prefix}{period}", f"GNGGA {prefix}{period}"]
+    commands += [f"PVTSLNA {prefix}{period}", f"UNIHEADINGA {prefix}{period}",
+                 f"GNHPR {prefix}{period}", f"BESTNAVA {prefix}{period}",
+                 f"GNGGA {prefix}{period}"]
     commands.append(f"CONFIG {args.output_port} {args.baud}")
 
     print(f"连接 {args.port} @ {args.current_baud}，发送 G90 配置…")

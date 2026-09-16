@@ -159,5 +159,53 @@ def test_safe_float_helper():
     assert _safe_float("12.34", 0.0) == 12.34
 
 
+def test_safe_int_helper():
+    pytest.importorskip('nav_msgs')
+    from gnss_driver.nodes.g90_node import _safe_int
+    assert _safe_int(None, 0) == 0
+    assert _safe_int(math.nan, 5) == 5
+    assert _safe_int("invalid", 1) == 1
+    assert _safe_int(12, 0) == 12
+    assert _safe_int("34", 0) == 34
+    assert _safe_int(34.9, 0) == 34
+
+
+def test_parse_uniheadinga():
+    # Valid UNIHEADINGA message
+    body = (
+        'UNIHEADINGA,97,GPS,FINE,2190,365174000,0,0,18,12;'
+        'SOL_COMPUTED,NARROW_INT,0.5023,170.3930,-4.0859,0.0000,0.2500,0.5000,"",18,16,18,18,0,01,0,0'
+    )
+    sentence = extended_sentence(body)
+    res = g90_unicore.parse_uniheadinga(sentence)
+    assert res is not None
+    assert res.sol_status == 0
+    assert res.heading_type == 50
+    assert abs(res.baseline - 0.5023) < 1e-4
+    assert abs(res.heading_deg - 170.3930) < 1e-4
+    assert abs(res.pitch_deg - (-4.0859)) < 1e-4
+    assert abs(res.heading_rad - math.radians(170.3930)) < 1e-4
+    assert abs(res.pitch_rad - math.radians(-4.0859)) < 1e-4
+    assert abs(res.heading_std - 0.25) < 1e-4
+    assert abs(res.pitch_std - 0.50) < 1e-4
+    assert res.svs_num == 18
+    assert res.soln_svs_num == 16
+
+    # Unsolved / Insufficient obs
+    unsolved_body = (
+        'UNIHEADINGA,97,GPS,FINE,2190,365174000,0,0,18,12;'
+        'INSUFFICIENT_OBS,NONE,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,"",0,0,0,0,0,00,0,0'
+    )
+    res_unsolved = g90_unicore.parse_uniheadinga(extended_sentence(unsolved_body))
+    assert res_unsolved is not None
+    assert res_unsolved.sol_status == 1
+    assert res_unsolved.heading_type == 0
+    assert res_unsolved.svs_num == 0
+    assert res_unsolved.soln_svs_num == 0
+
+    # Bad CRC
+    assert g90_unicore.parse_uniheadinga('#UNIHEADINGA,...*12345678') is None
+
+
 
 

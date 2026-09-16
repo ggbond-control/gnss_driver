@@ -12,7 +12,9 @@ from .. import nmea
 from ..adapters.g90_unicore import (
     parse_pvtslna,
     parse_bestnava,
+    parse_uniheadinga,
     parse_gnhpr,
+    Gnhpr,
     gga_solution,
     euler_to_quaternion,
 )
@@ -25,6 +27,16 @@ def _safe_float(val, default=0.0):
     try:
         f = float(val)
         return f if math.isfinite(f) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(val, default=0):
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        return int(f) if math.isfinite(f) else default
     except (TypeError, ValueError):
         return default
 
@@ -63,6 +75,34 @@ class G90DriverNode(BaseSerialGnssNode):
         if line.startswith('#PVTSLNA'):
             parsed = parse_pvtslna(line)
             if parsed:
+                # Always extract dual-antenna heading from PVTSLNA if present,
+                # ensuring heading is not lost when BESTNAVA handles position/velocity.
+                h_deg = parsed.get('heading_deg')
+                if h_deg is not None and math.isfinite(h_deg):
+                    htype = _safe_int(parsed.get('heading_type', 0))
+                    hstatus = 0 if htype in (16, 17, 34, 50) else 1
+                    p_deg = _safe_float(parsed.get('pitch_deg'), 0.0)
+                    base_len = _safe_float(parsed.get('heading_length'), math.nan)
+                    svs = _safe_int(parsed.get('heading_svs_num') or parsed.get('svs_num'), 0)
+                    soln_svs = _safe_int(parsed.get('heading_soln_svs_num') or parsed.get('soln_svs_num'), 0)
+                    diff_age = _safe_float(parsed.get('diff_age_s'), math.nan)
+                    self.heading = Gnhpr((
+                        math.radians(h_deg),
+                        math.radians(p_deg),
+                        0.0,
+                        h_deg,
+                        p_deg,
+                        0.0,
+                        hstatus,
+                        htype,
+                        base_len,
+                        svs,
+                        diff_age,
+                        math.nan,
+                        math.nan,
+                        soln_svs,
+                    ))
+
                 # BESTNAVA is authoritative whenever it is arriving.  Keep
                 # PVTSLNA as a fallback only when BESTNAVA has been absent.
                 now_ns = self.get_clock().now().nanoseconds
@@ -70,6 +110,8 @@ class G90DriverNode(BaseSerialGnssNode):
                     return
                 self.latest = parsed
                 self._publish()
+        elif line.startswith(('#UNIHEADINGA', '#HEADINGA', '#HEADING2A')):
+            self.heading = parse_uniheadinga(line)
         elif line.startswith('#BESTNAVA'):
             self.velocity = parse_bestnava(line)
             if self.velocity and 'latitude' in self.velocity:
@@ -77,7 +119,7 @@ class G90DriverNode(BaseSerialGnssNode):
                 self._bestnav_last_ns = self.get_clock().now().nanoseconds
                 self.latest = self.velocity
                 self._publish()
-        elif line.startswith('$GNHPR'):
+        elif line.startswith(('$GNHPR', '$GPHPR')):
             self.heading = parse_gnhpr(line)
         elif line.startswith(('$GNGGA', '$GPGGA', '$BDGGA')):
             try:
@@ -117,7 +159,6 @@ class G90DriverNode(BaseSerialGnssNode):
                 if isinstance(hdt, nmea.Hdt) and h_deg_raw is not None and math.isfinite(h_deg_raw):
                     h_deg = h_deg_raw % 360.0
                     h_rad = math.radians(h_deg)
-                    from ..adapters.g90_unicore import Gnhpr
                     self.heading = Gnhpr((h_rad, 0.0, 0.0, h_deg, 0.0, 0.0, 1, 0, math.nan, 0, math.nan))
             except ValueError:
                 pass
@@ -300,7 +341,7 @@ class G90DriverNode(BaseSerialGnssNode):
         rtk.heading.utc_time_s = rtk.bestnav.utc_time_s
         if self.heading is not None and hasattr(self.heading, 'diff_age_s'):
             heading_age = getattr(self.heading, 'diff_age_s', math.nan)
-            if math.isfinite(heading_age):
+            if math.isfinite(heading_age) and (not math.isfinite(rtk.bestnav.diff_age_s) or rtk.bestnav.diff_age_s == 0.0):
                 rtk.bestnav.diff_age_s = float(heading_age)
 
         roll_deg = 0.0
@@ -312,8 +353,18 @@ class G90DriverNode(BaseSerialGnssNode):
         if heading is None and math.isfinite(_safe_float(d.get('heading_deg'), math.nan)):
             h = _safe_float(d.get('heading_deg'), 0.0)
             p = _safe_float(d.get('pitch_deg'), 0.0)
-            from ..adapters.g90_unicore import Gnhpr
-            heading = Gnhpr((math.radians(h), math.radians(p), 0.0, h, p, 0.0, 1, 0, math.nan, 0, math.nan))
+            htype = _safe_int(d.get('heading_type', 0))
+            hstatus = 0 if htype in (16, 17, 34, 50) else 1
+            blen = _safe_float(d.get('heading_length'), math.nan)
+            svs = _safe_int(d.get('heading_svs_num') or d.get('svs_num'), 0)
+            soln_svs = _safe_int(d.get('heading_soln_svs_num') or d.get('soln_svs_num'), 0)
+            diff_age = _safe_float(d.get('diff_age_s'), math.nan)
+            heading = Gnhpr((
+                math.radians(h), math.radians(p), 0.0,
+                h, p, 0.0,
+                hstatus, htype, blen, svs, diff_age,
+                math.nan, math.nan, soln_svs,
+            ))
 
         if heading:
             h_raw = getattr(heading, 'heading_deg', None)
@@ -324,19 +375,19 @@ class G90DriverNode(BaseSerialGnssNode):
             pitch_deg = _safe_float(p_raw, 0.0)
             roll_deg = _safe_float(r_raw, 0.0)
 
-            heading_type = int(getattr(heading, 'heading_type', 0) or d.get('heading_type', 0) or 0)
+            heading_type = _safe_int(getattr(heading, 'heading_type', 0) or d.get('heading_type', 0), 0)
             # Zero is a valid GNHPR QF (solution computed); do not use ``or``
             # here because it would turn a valid status 0 into 1.
-            heading_status = int(getattr(heading, 'sol_status', 1))
+            heading_status = _safe_int(getattr(heading, 'sol_status', 1), 1)
             rtk.heading.sol_status = heading_status
             rtk.heading.heading_type = heading_type
             rtk.heading.base_line = _safe_float(getattr(heading, 'baseline', d.get('heading_length')), math.nan)
             rtk.heading.heading_deg = heading_deg if (h_raw is not None and math.isfinite(h_raw)) else math.nan
             rtk.heading.pitch_deg = pitch_deg if (p_raw is not None and math.isfinite(p_raw)) else math.nan
-            rtk.heading.heading_std = _safe_float(d.get('heading_std'), math.nan)
-            rtk.heading.pitch_std = _safe_float(d.get('pitch_std'), math.nan)
-            rtk.heading.svs_num = int(getattr(heading, 'svs_num', 0) or d.get('heading_svs_num') or svs_num)
-            rtk.heading.soln_svs_num = int(d.get('heading_soln_svs_num') or soln_svs_num)
+            rtk.heading.heading_std = _safe_float(getattr(heading, 'heading_std', d.get('heading_std')), math.nan)
+            rtk.heading.pitch_std = _safe_float(getattr(heading, 'pitch_std', d.get('pitch_std')), math.nan)
+            rtk.heading.svs_num = _safe_int(getattr(heading, 'svs_num', 0) or d.get('heading_svs_num') or svs_num, 0)
+            rtk.heading.soln_svs_num = _safe_int(getattr(heading, 'soln_svs_num', 0) or d.get('heading_soln_svs_num') or soln_svs_num, 0)
         else:
             rtk.heading.sol_status = 1
             rtk.heading.heading_type = 0

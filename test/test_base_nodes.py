@@ -395,6 +395,81 @@ def test_g90_handle_line_end_to_end():
         rclpy.shutdown()
 
 
+def test_g90_heading_preserved_with_bestnava_and_pvtslna():
+    """Verify that when BESTNAVA and PVTSLNA arrive together, dual-antenna heading is NOT lost."""
+    import rclpy
+    rclpy.init()
+    try:
+        g90 = G90DriverNode()
+
+        # 1. Feed BESTNAVA (Position & Velocity only, no heading)
+        bestnava_body = (
+            'BESTNAVA,COM1,0,0,FINESTEERING,2300,345601.0,SOL_COMPUTED,NARROW_INT,0,'
+            '7.5,30.2,120.3,0.3,0.1,0.2,1.3,8.0,34,21,'
+            'SOL_COMPUTED,SINGLE,0.0263,239.47,0.013,0.154,0.058'
+        )
+        g90.handle_line(_make_extended(bestnava_body))
+
+        # 2. Feed PVTSLNA containing dual-antenna heading (heading_deg=170.393, pitch=-4.086, type=50)
+        pvtslna_body = (
+            'PVTSLNA,COM1,0,0,FINESTEERING,2300,345601.0,SOL_COMPUTED,NARROW_INT,0;'
+            'NARROW_INT,7.5,30.2,120.3,0.3,0.1,0.2,1.3,0,0,0,0,0.0,24,18,0,0,0.0,0.0,0.0,50,0.50,170.393,-4.086,18,18'
+        )
+        g90.handle_line(_make_extended(pvtslna_body))
+
+        # Check that self.heading was extracted
+        assert g90.heading is not None
+        assert abs(g90.heading.heading_deg - 170.393) < 1e-3
+        assert abs(g90.heading.pitch_deg - (-4.086)) < 1e-3
+        assert g90.heading.sol_status == 0
+        assert g90.heading.heading_type == 50
+
+        # 3. Feed next BESTNAVA sentence (triggers _publish)
+        bestnava_body2 = (
+            'BESTNAVA,COM1,0,0,FINESTEERING,2300,345601.1,SOL_COMPUTED,NARROW_INT,0,'
+            '7.5,30.2,120.3,0.3,0.1,0.2,1.3,8.0,34,21,'
+            'SOL_COMPUTED,SINGLE,0.0263,239.47,0.013,0.154,0.058'
+        )
+        g90.handle_line(_make_extended(bestnava_body2))
+
+        # Verify that heading is populated in published rtk message!
+        assert g90.rtk_pub.publish.called
+        last_rtk = g90.rtk_pub.publish.call_args[0][0]
+        assert abs(last_rtk.heading.heading_deg - 170.393) < 1e-3
+        assert abs(last_rtk.heading.pitch_deg - (-4.086)) < 1e-3
+        assert last_rtk.heading.sol_status == 0
+        assert last_rtk.heading.heading_type == 50
+        assert last_rtk.heading.svs_num == 18
+        assert last_rtk.heading.soln_svs_num == 18
+
+        # Also verify UNIHEADINGA updates heading
+        uniheading_body = (
+            'UNIHEADINGA,97,GPS,FINE,2190,365174000,0,0,18,12;'
+            'SOL_COMPUTED,NARROW_INT,0.5023,185.500,-2.100,0.0000,0.2500,0.5000,"",20,18,18,18,0,01,0,0'
+        )
+        g90.handle_line(_make_extended(uniheading_body))
+        assert abs(g90.heading.heading_deg - 185.500) < 1e-3
+
+        # Feed another BESTNAVA to publish with new heading
+        bestnava_body3 = (
+            'BESTNAVA,COM1,0,0,FINESTEERING,2300,345601.2,SOL_COMPUTED,NARROW_INT,0,'
+            '7.5,30.2,120.3,0.3,0.1,0.2,1.3,8.0,34,21,'
+            'SOL_COMPUTED,SINGLE,0.0263,239.47,0.013,0.154,0.058'
+        )
+        g90.handle_line(_make_extended(bestnava_body3))
+        last_rtk = g90.rtk_pub.publish.call_args[0][0]
+        assert abs(last_rtk.heading.heading_deg - 185.500) < 1e-3
+        assert abs(last_rtk.heading.pitch_deg - (-2.100)) < 1e-3
+        assert last_rtk.heading.sol_status == 0
+        assert last_rtk.heading.heading_type == 50
+        assert last_rtk.heading.svs_num == 20
+        assert last_rtk.heading.soln_svs_num == 18
+
+        g90.destroy_node()
+    finally:
+        rclpy.shutdown()
+
+
 def test_d1m_bridge_on_message_end_to_end():
     """Verify D1MBridgeNode._on_rtk correctly handles dual-antenna RTK messages."""
     import rclpy
