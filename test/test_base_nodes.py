@@ -154,14 +154,20 @@ def setup_ros_mocks():
         def __init__(self):
             self.header = types.SimpleNamespace(stamp=MockTimeMsg(), frame_id='gps')
             self.child_frame_id = 'base_link'
-            self.pose = types.SimpleNamespace(pose=types.SimpleNamespace(
-                position=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
-                orientation=types.SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)
-            ))
-            self.twist = types.SimpleNamespace(twist=types.SimpleNamespace(
-                linear=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
-                angular=types.SimpleNamespace(x=0.0, y=0.0, z=0.0)
-            ))
+            self.pose = types.SimpleNamespace(
+                pose=types.SimpleNamespace(
+                    position=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                    orientation=types.SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)
+                ),
+                covariance=[0.0] * 36
+            )
+            self.twist = types.SimpleNamespace(
+                twist=types.SimpleNamespace(
+                    linear=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                    angular=types.SimpleNamespace(x=0.0, y=0.0, z=0.0)
+                ),
+                covariance=[0.0] * 36
+            )
     nav_msgs_msg.Odometry = Odometry
     nav_msgs.msg = nav_msgs_msg
 

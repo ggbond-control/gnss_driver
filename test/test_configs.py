@@ -36,7 +36,7 @@ def test_transform_configs(device, has_rtk):
     params = data['gnss_transform']['ros__parameters']
     assert params['transform_path'] == f'{device}_gps_odom_transform.txt'
     if has_rtk:
-        assert params['rtk_topic'] == '/rtk_pvh'
+        assert params['rtk_topic'] in ('/rtk_pvh', '/rtk_pvh_g90')
     else:
         assert params['rtk_topic'] == ''
 

@@ -6,14 +6,14 @@ gnss_transform:
     output_topic: /fix_from_odom
 
     # G90 (和芯星通 UM982) RTK 辅助里程计输出
-    rtk_topic: /rtk_pvh
+    rtk_topic: /rtk_pvh_g90
     rtk_output_topic: /odometry_from_rtk
     rtk_fix_topic: /fix_from_rtk
     rtk_frame_id: gps
     rtk_child_frame_id: rtk_gps
 
     # 导航动作与服务对接
-    enable_gps_goal_action: true
+    enable_gps_goal_action: false
     gps_goal_action: /set_gps_goal
     navigation_action: /multi_map_navigate_to_pose
     next_goal_policy_service: /next_goal_policy

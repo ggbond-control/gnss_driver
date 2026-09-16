@@ -178,17 +178,20 @@ class TransformNode(Node):
     def _set_rtk_position_covariance(self, odom, fix):
         """Rotate UniBestNav east/north covariance into the TXT world axes."""
         if fix.position_covariance_type == NavSatFix.COVARIANCE_TYPE_UNKNOWN:
-            odom.pose.covariance[21] = -1.0
             return
         enu_covariance = np.diag((fix.position_covariance[0], fix.position_covariance[4]))
         world_covariance = self.transform.rotation @ enu_covariance @ self.transform.rotation.T
-        odom.pose.covariance[0] = float(world_covariance[0, 0])
-        odom.pose.covariance[1] = float(world_covariance[0, 1])
-        odom.pose.covariance[6] = float(world_covariance[1, 0])
-        odom.pose.covariance[7] = float(world_covariance[1, 1])
-        odom.pose.covariance[14] = fix.position_covariance[8]
-        # Heading is intentionally not mapped in this first RTK integration.
-        odom.pose.covariance[21] = -1.0
+        c_xx = max(0.0, float(world_covariance[0, 0]))
+        c_yy = max(0.0, float(world_covariance[1, 1]))
+        c_xy = 0.5 * (float(world_covariance[0, 1]) + float(world_covariance[1, 0]))
+        c_zz = max(0.0, float(fix.position_covariance[8]))
+
+        odom.pose.covariance[0] = c_xx
+        odom.pose.covariance[1] = c_xy
+        odom.pose.covariance[6] = c_xy
+        odom.pose.covariance[7] = c_yy
+        odom.pose.covariance[14] = c_zz
+        # Orientation covariance remains 0.0 (positive semi-definite, no negative eigenvalues in RViz)
 
     def _publish_gps_tf(self, message):
         """Place the NavSatFix sensor frame at the same world pose as the odometry."""
