@@ -5,14 +5,9 @@ gnss_device:
 
     # 串口连接参数（QinHeng USB 串口）
     port: /dev/wheeltec_gnss
-    baud: 115200
+    baud: 460800
     timeout_sec: 0.1
     reconnect_sec: 2.0
-
-    # 硬件启动自动配置（关闭 GSV/GSA 冗余报文，解算与输出自动提升至 10Hz）
-    configure_hardware: true
-    hardware_rate_hz: 10.0
-    unlog_debug_sentences: true
 
     # 坐标系与发布话题
     frame_id: gps

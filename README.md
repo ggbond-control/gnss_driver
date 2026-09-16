@@ -93,6 +93,45 @@ sudo usermod -aG dialout "$USER"
 
 重新插拔设备或重新登录后生效。可以通过 `ls -l /dev/wheeltec_*` 验证软链接。
 
+#### 串口波特率配置
+
+驱动端的波特率由设备 YAML 中的 `baud` 参数控制，代码不限制为某一个固定值，
+例如 G90 默认是 115200，G60 默认是 9600。修改对应文件即可：
+
+```yaml
+# config/devices/g90.yaml
+gnss_device:
+  ros__parameters:
+    baud: 230400
+```
+
+修改后重新启动节点（无需重新编译）。也可以在直接运行节点时临时覆盖：
+
+```zsh
+ros2 run gnss_driver g90_driver --ros-args -p baud:=230400
+```
+
+注意：接收机 UART 的输出波特率必须先通过厂家配置工具/串口命令改成相同值，
+然后再修改 YAML；只改 ROS 参数会导致乱码或完全收不到数据。修改接收机波特率后，
+重新插拔或重启接收机使设置生效。G90 的 `/dev/wheeltec_rtk` 是 NTRIP 注入的
+另一物理串口，其速率由 `config/ntrip.yaml` 的 `rtk_baud` 单独控制，与主串口
+ `baud` 无关。
+
+波特率修改建议使用下面的一次性配置工具；运行驱动本身不会修改接收机 UART，
+只会读取 YAML 中的 `baud` 参数。这样可避免每次重启时重复改写设备配置。
+
+推荐使用一次性配置工具完成修改、保存和校验：
+
+```zsh
+ros2 run gnss_driver gnss_g90_configure \
+  --port /dev/wheeltec_gnss --current-baud 115200 \
+  --baud 460800 --output-port COM1
+```
+
+工具会用旧速率发送输出配置和 `CONFIG`，再以新速率重连，发送 `SAVECONFIG` 并执行
+`CONFIG` 查询。终端显示“配置成功”且回显目标波特率才算验证通过。完成后把
+`config/devices/g90.yaml` 的 `baud` 改为新值（例如 `460800`）。
+
 ### 2. GPS/里程计对齐
 
 支持通过 `device` 参数（`g60`、`g90`、`d1m`）自动加载对应的参数文件（`config/<device>_alignment.yaml`）：
