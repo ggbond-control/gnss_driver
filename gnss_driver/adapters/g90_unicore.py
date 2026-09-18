@@ -127,7 +127,7 @@ def parse_pvtslna(sentence):
         result['vel_north'] = number(base + 16)
         result['vel_east'] = number(base + 17)
         result['speed'] = number(base + 18)
-        result['heading_type'] = integer(base + 19)
+        result['heading_type'] = parse_solution_type(payload[base + 19] if len(payload) > base + 19 else '', 0)
         result['heading_length'] = number(base + 20)
         result['heading_deg'] = number(base + 21)
         result['pitch_deg'] = number(base + 22)
@@ -199,17 +199,31 @@ def _solution_fields(fields):
                 pos_type = type_tokens[upper]
     return status, pos_type
 
+def parse_solution_type(token, default=0):
+    if token is None:
+        return default
+    token_str = str(token).strip().upper()
+    type_map = {
+        'NONE': 0, 'SINGLE': 16, 'PSRDIFF': 17,
+        'NARROW_FLOAT': 34, 'NARROW_INT': 50,
+    }
+    if token_str in type_map:
+        return type_map[token_str]
+    try:
+        val = float(token_str)
+        return int(val) if math.isfinite(val) else default
+    except (ValueError, TypeError):
+        return default
+
+
 def _solution_token_pair(status_token, type_token):
     status_map = {
         'SOL_COMPUTED': 0, 'INSUFFICIENT_OBS': 1,
         'NO_CONVERGENCE': 2, 'COV_TRACE': 4,
     }
-    type_map = {
-        'NONE': 0, 'SINGLE': 16, 'PSRDIFF': 17,
-        'NARROW_FLOAT': 34, 'NARROW_INT': 50,
-    }
-    return status_map.get(str(status_token).strip().upper(), 1), type_map.get(
-        str(type_token).strip().upper(), 0)
+    status = status_map.get(str(status_token).strip().upper(), 1)
+    pos_type = parse_solution_type(type_token, 0)
+    return status, pos_type
 
 
 def _solution_known(fields):

@@ -91,6 +91,26 @@ def test_pvtslna_full_metadata():
     assert result['sol_age_s'] == 0.2
 
 
+def test_pvtslna_documented_heading_type_parsing():
+    payload = (
+        'PVTSLNA,COM1,0,0,FINESTEERING,2300,345600.5,SOL_COMPUTED,NARROW_INT,0;'
+        'NARROW_INT,7.5,30.2,120.3,0.3,0.1,0.2,1.2,0.0,0,0,0,7.6,30,22,0,0,0.0,0.0,0.0,'
+        'NARROW_INT,0.75,167.1,-1.5,31,20'
+    )
+    sentence = extended_sentence(payload)
+    result = g90_unicore.parse_pvtslna(sentence)
+    assert result is not None
+    assert result['heading_type'] == 50
+    assert abs(result['heading_deg'] - 167.1) < 1e-4
+    assert abs(result['pitch_deg'] - (-1.5)) < 1e-4
+    assert abs(result['heading_length'] - 0.75) < 1e-4
+    assert result['heading_svs_num'] == 31
+    assert result['heading_soln_svs_num'] == 20
+    assert result['undulation'] == 7.6
+    assert result['svs_num'] == 30
+    assert result['soln_svs_num'] == 22
+
+
 def test_euler_to_quaternion():
     from gnss_driver.adapters.g90_unicore import euler_to_quaternion
     # Identity
