@@ -300,7 +300,7 @@ class TransformNode(Node):
                 return True, False
         return False, False
 
-    def _set_next_goal_yaw_policy(self, goal_handle, skip_yaw_alignment):
+    def _set_next_goal_navigation_policy(self, goal_handle, arrival_mode, speed_limit_mps):
         service_ready, canceled = self._wait_for_policy_service(goal_handle)
         if canceled:
             return False, 'SetGPSGoal was canceled before setting next goal policy', True
@@ -309,12 +309,17 @@ class TransformNode(Node):
                 self.next_goal_policy_wait_sec, self.next_goal_policy_service), False
 
         parameter = Parameter()
-        parameter.name = 'align_final_yaw'
-        parameter.value = ParameterValue()
-        parameter.value.type = ParameterType.PARAMETER_BOOL
-        parameter.value.bool_value = not skip_yaw_alignment
+        if arrival_mode not in ('precise', 'coarse', 'position_only'):
+            return False, 'invalid arrival_mode', False
+        if not math.isfinite(speed_limit_mps) or speed_limit_mps < 0:
+            return False, 'invalid speed_limit_mps', False
+        parameter.name = 'arrival_mode'
+        parameter.value = ParameterValue(type=ParameterType.PARAMETER_STRING,
+                                         string_value=arrival_mode)
+        speed = Parameter(name='speed_limit_mps', value=ParameterValue(
+            type=ParameterType.PARAMETER_DOUBLE, double_value=float(speed_limit_mps)))
         request = SetParameters.Request()
-        request.parameters = [parameter]
+        request.parameters = [parameter, speed]
         future = self.next_goal_policy_client.call_async(request)
 
         completed = threading.Event()
@@ -329,13 +334,13 @@ class TransformNode(Node):
             response = future.result()
         except Exception as error:
             return False, 'next goal policy request failed: {}'.format(error), False
-        if response is None or not response.results:
-            return False, 'next goal policy returned no parameter result', False
+        if response is None or len(response.results) != len(request.parameters):
+            return False, 'next goal policy returned incomplete parameter results', False
         failed = [result.reason or 'unspecified error'
                   for result in response.results if not result.successful]
         if failed:
             return False, 'next goal policy was rejected: {}'.format('; '.join(failed)), False
-        return True, 'align_final_yaw={}'.format(not skip_yaw_alignment), False
+        return True, 'arrival_mode={} speed_limit_mps={}'.format(arrival_mode, speed_limit_mps), False
 
     def _send_and_wait_for_navigation(self, goal_handle):
         request = goal_handle.request
@@ -362,8 +367,8 @@ class TransformNode(Node):
             return self._cancel(goal_handle, 'SetGPSGoal was canceled before sending navigation goal')
 
         x, y, z = self.transform.gps_lla_to_world(*values)
-        policy_set, policy_message, canceled = self._set_next_goal_yaw_policy(
-            goal_handle, request.skip_yaw_alignment)
+        policy_set, policy_message, canceled = self._set_next_goal_navigation_policy(
+            goal_handle, request.arrival_mode, request.speed_limit_mps)
         if canceled:
             return self._cancel(goal_handle, policy_message)
         if not policy_set:

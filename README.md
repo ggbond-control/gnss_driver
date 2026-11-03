@@ -198,3 +198,7 @@ ros2 run gnss_driver gnss_transform_convert --transform data/g90_gps_odom_transf
 - G90 的 GPS 周/周内秒、位置、位置标准差和速度来自 UM982 专有报文；定位质量、定位类型和卫星数优先来自同一串口的 GGA；`$GNHPR` 的航向/俯仰写入 `UniRtkPvh.heading`。原始报文没有提供或当前参考驱动未证明来源的字段保持 `0`、`NaN` 或“未解算”，不伪造 RTK fixed 状态。
 - `/fix` 是接收机自身定位结果，不是融合定位；`/fix_odom`、`/fix_from_odom` 是由里程计和变换反算的 GPS。
 - ENU 使用局部小范围近似，适合车辆作业区域，不适合跨大区域测量。
+
+## 显式航点导航策略
+
+`SetGPSGoal` 已用 `arrival_mode`（precise/coarse/position_only）和 `speed_limit_mps` 替换旧 `skip_yaw_alignment`。GPS 桥仅做坐标转换与同一策略转发，不推断 yaw=0 或空任务的含义。先成功设置 `/next_goal_policy` 再发出导航目标；失败时终止本目标，取消仍向下转发。ROS goal 中速度 0 表示无路线附加限制。须同步更新 inspection_interfaces、TaskHub 和导航节点。
